@@ -1,19 +1,36 @@
 nextflow.enable.dsl=2
 
-process sayHello {
+process PHIDRA {
+    input:
+    val
+
     output:
     stdout
 
     script:
     """
-    echo "Hello, Nextflow!"
+    conda activate
+
+    for p in ${PROTEINS}
+    do
+    DB=${p}_db
+    IDA=${p}_ida
+
+    python phidra_run.py \
+    -i ${QUERY_FILE} \
+    -db ${!DB} \
+    -pfam ${PFAM} \
+    -ida ${IDA_DIR}/${!IDA} \
+    -f ${p} \
+    -o ${OUTDIR} \
+    -t 18
+
+    done
+
+    conda deactivate
     """
 }
 
 workflow {
-    // Run the process and capture its output
-    ch = sayHello()
-    
-    // View the output by printing to the console
-    ch.view()
+    sayHello()
 }
