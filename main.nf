@@ -1,36 +1,31 @@
 nextflow.enable.dsl=2
 
 process PHIDRA {
+    conda "/home/nolanv/.conda/envs/phidra"
+
+
     input:
-    val
+    val p
 
     output:
-    stdout
+    path "${params.outdir}/"
 
     script:
     """
-    conda activate
-
-    for p in ${PROTEINS}
-    do
-    DB=${p}_db
-    IDA=${p}_ida
-
-    python phidra_run.py \
-    -i ${QUERY_FILE} \
-    -db ${!DB} \
-    -pfam ${PFAM} \
-    -ida ${IDA_DIR}/${!IDA} \
+    source /etc/profile.d/conda.sh
+    conda activate /home/nolanv/.conda/envs/phidra
+    python /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/phidra_run.py \
+    -i ${params.input_fasta} \
+    -db ${params.subjectDB} \
+    -pfam ${params.pfamDB} \
+    -ida ${params.pfamDomain} \
     -f ${p} \
-    -o ${OUTDIR} \
-    -t 18
+    -o ${params.outdir} 
 
-    done
-
-    conda deactivate
     """
 }
 
 workflow {
-    sayHello()
+    Channel.from(params.proteins)
+        | PHIDRA // Send each protein to PHIDRA process
 }
