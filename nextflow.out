@@ -1,8 +1,313 @@
 
  N E X T F L O W   ~  version 24.10.5
 
-Launching `main.nf` [romantic_shockley] DSL2 - revision: c71f21d66a
+Launching `main_copy.nf` [cheeky_poincare] DSL2 - revision: d99056935f
 
 [-        ] PHIDRA -
 
-[-        ] PHIDRA | 0 of 1
+executor >  local (1)
+[55/5d9e7e] PHIDRA | 0 of 1
+
+executor >  local (1)
+[55/5d9e7e] PHIDRA | 0 of 1
+ERROR ~ Error executing process > 'PHIDRA'
+
+Caused by:
+  Process `PHIDRA` terminated with an error exit status (2)
+
+
+Command executed:
+
+  source /etc/profile.d/conda.sh
+  conda activate /home/nolanv/.conda/envs/phidra
+  
+  
+  
+  # Copy the phidra directory contents to the task directory
+  cp -r /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/*
+  
+  # Debugging: List the contents of the phidra directory in the task's working directory
+  ls -al
+  
+  python phidra_run.py         -i /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna         -db /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta         -pfam /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database         -ida /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv         -f PolA         -o phidra_output_test/
+
+Command exit status:
+  2
+
+Command output:
+  total 272
+  drwxr-sr-x 2 nolanv polson  181 Apr  5 13:07 .
+  drwxr-sr-x 3 nolanv polson   48 Apr  5 13:07 ..
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.begin
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.err
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.log
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.out
+  -rw-r--r-- 1 nolanv polson 2751 Apr  5 13:07 .command.run
+  -rw-r--r-- 1 nolanv polson  776 Apr  5 13:07 .command.sh
+
+Command error:
+  total 272
+  drwxr-sr-x 2 nolanv polson  181 Apr  5 13:07 .
+  drwxr-sr-x 3 nolanv polson   48 Apr  5 13:07 ..
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.begin
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.err
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.log
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.out
+  -rw-r--r-- 1 nolanv polson 2751 Apr  5 13:07 .command.run
+  -rw-r--r-- 1 nolanv polson  776 Apr  5 13:07 .command.sh
+  python: can't open file 'phidra_run.py': [Errno 2] No such file or directory
+
+Work dir:
+  /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/55/5d9e7eb2ac6858d00d45efc86378cb
+
+Tip: you can try to figure out what's wrong by changing to the process work dir and showing the script file named `.command.sh`
+
+ -- Check '.nextflow.log' file for details
+
+executor >  local (1)
+[55/5d9e7e] PHIDRA | 1 of 1, failed: 1 ✘
+ERROR ~ Error executing process > 'PHIDRA'
+
+Caused by:
+  Process `PHIDRA` terminated with an error exit status (2)
+
+
+Command executed:
+
+  source /etc/profile.d/conda.sh
+  conda activate /home/nolanv/.conda/envs/phidra
+  
+  
+  
+  # Copy the phidra directory contents to the task directory
+  cp -r /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/*
+  
+  # Debugging: List the contents of the phidra directory in the task's working directory
+  ls -al
+  
+  python phidra_run.py         -i /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna         -db /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta         -pfam /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database         -ida /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv         -f PolA         -o phidra_output_test/
+
+Command exit status:
+  2
+
+Command output:
+  total 272
+  drwxr-sr-x 2 nolanv polson  181 Apr  5 13:07 .
+  drwxr-sr-x 3 nolanv polson   48 Apr  5 13:07 ..
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.begin
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.err
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.log
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.out
+  -rw-r--r-- 1 nolanv polson 2751 Apr  5 13:07 .command.run
+  -rw-r--r-- 1 nolanv polson  776 Apr  5 13:07 .command.sh
+
+Command error:
+  total 272
+  drwxr-sr-x 2 nolanv polson  181 Apr  5 13:07 .
+  drwxr-sr-x 3 nolanv polson   48 Apr  5 13:07 ..
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.begin
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.err
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.log
+  -rw-r--r-- 1 nolanv polson    0 Apr  5 13:07 .command.out
+  -rw-r--r-- 1 nolanv polson 2751 Apr  5 13:07 .command.run
+  -rw-r--r-- 1 nolanv polson  776 Apr  5 13:07 .command.sh
+  python: can't open file 'phidra_run.py': [Errno 2] No such file or directory
+
+Work dir:
+  /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/55/5d9e7eb2ac6858d00d45efc86378cb
+
+Tip: you can try to figure out what's wrong by changing to the process work dir and showing the script file named `.command.sh`
+
+ -- Check '.nextflow.log' file for details
+
+
+executor >  local (1)
+[cf/448300] PHIDRA | 0 of 1
+ERROR ~ Error executing process > 'PHIDRA'
+
+Caused by:
+  Process `PHIDRA` terminated with an error exit status (1)
+
+
+Command executed:
+
+  source /etc/profile.d/conda.sh
+  conda activate /home/nolanv/.conda/envs/phidra
+  
+  mkdir -p phidra
+  
+  # Copy the phidra directory contents to the task directory
+  cp -r /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/* phidra/
+  
+  # Debugging: List the contents of the phidra directory in the task's working directory
+  ls -al phidra
+  
+  cd phidra
+  python phidra_run.py         -i /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna         -db /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta         -pfam /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database         -ida /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv         -f PolA         -o phidra_output_test/
+
+Command exit status:
+  1
+
+Command output:
+  total 432
+  drwxr-sr-x 6 nolanv polson   226 Apr  5 13:02 .
+  drwxr-sr-x 3 nolanv polson   205 Apr  5 13:02 ..
+  drwxr-sr-x 2 nolanv polson   190 Apr  5 13:02 bin
+  -rw-r--r-- 1 nolanv polson 35149 Apr  5 13:02 LICENSE
+  drwxr-sr-x 2 nolanv polson   188 Apr  5 13:02 pfam_database
+  -rwxr-xr-x 1 nolanv polson 10917 Apr  5 13:02 phidra_run.py
+  -rw-r--r-- 1 nolanv polson  8616 Apr  5 13:02 README.md
+  -rw-r--r-- 1 nolanv polson    43 Apr  5 13:02 requirements.txt
+  drwxr-sr-x 5 nolanv polson    85 Apr  5 13:02 test_data
+  drwxr-sr-x 5 nolanv polson    99 Apr  5 13:02 test_results
+  Running /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna with the following parameters:
+    Input FASTA: /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna
+    Subject DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta
+    Pfam HMM DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+    IDA File: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv
+    Output Directory: phidra_output_test/
+    Function: PolA
+    Threads: 2
+  =======================================================================================
+  Running analysis for PolA sequences using /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv as domain validation
+  [1/8] Processing Inital Search: mmseqs createdb /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta phidra_output_test/PolA/subject_db/PolA_db
+  [2/8] Processing Inital Search: mmseqs createindex phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/subject_db/tmp
+  [3/8] Processing Inital Search: mmseqs easy-search -e 1E-3 --threads 2 /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/tmp
+  [4/8] Processing Inital Search: python phidra/bin/mmseqs_tophit_calculation.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Bitscore.tsv
+  [5/8] Processing Inital Search: python phidra/bin/generate_tophit_fasta.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa
+  [6/8] Processing Inital Search: python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+
+Command error:
+  total 432
+  drwxr-sr-x 6 nolanv polson   226 Apr  5 13:02 .
+  drwxr-sr-x 3 nolanv polson   205 Apr  5 13:02 ..
+  drwxr-sr-x 2 nolanv polson   190 Apr  5 13:02 bin
+  -rw-r--r-- 1 nolanv polson 35149 Apr  5 13:02 LICENSE
+  drwxr-sr-x 2 nolanv polson   188 Apr  5 13:02 pfam_database
+  -rwxr-xr-x 1 nolanv polson 10917 Apr  5 13:02 phidra_run.py
+  -rw-r--r-- 1 nolanv polson  8616 Apr  5 13:02 README.md
+  -rw-r--r-- 1 nolanv polson    43 Apr  5 13:02 requirements.txt
+  drwxr-sr-x 5 nolanv polson    85 Apr  5 13:02 test_data
+  drwxr-sr-x 5 nolanv polson    99 Apr  5 13:02 test_results
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+  Running /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna with the following parameters:
+    Input FASTA: /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna
+    Subject DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta
+    Pfam HMM DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+    IDA File: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv
+    Output Directory: phidra_output_test/
+    Function: PolA
+    Threads: 2
+  =======================================================================================
+  Running analysis for PolA sequences using /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv as domain validation
+  [1/8] Processing Inital Search: mmseqs createdb /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta phidra_output_test/PolA/subject_db/PolA_db
+  [2/8] Processing Inital Search: mmseqs createindex phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/subject_db/tmp
+  [3/8] Processing Inital Search: mmseqs easy-search -e 1E-3 --threads 2 /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/tmp
+  [4/8] Processing Inital Search: python phidra/bin/mmseqs_tophit_calculation.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Bitscore.tsv
+  [5/8] Processing Inital Search: python phidra/bin/generate_tophit_fasta.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa
+  [6/8] Processing Inital Search: python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+
+Work dir:
+  /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/cf/448300a93c1927abb5c68bed678ebf
+
+Tip: when you have fixed the problem you can continue the execution adding the option `-resume` to the run command line
+
+ -- Check '.nextflow.log' file for details
+
+executor >  local (1)
+[cf/448300] PHIDRA | 1 of 1, failed: 1 ✘
+ERROR ~ Error executing process > 'PHIDRA'
+
+Caused by:
+  Process `PHIDRA` terminated with an error exit status (1)
+
+
+Command executed:
+
+  source /etc/profile.d/conda.sh
+  conda activate /home/nolanv/.conda/envs/phidra
+  
+  mkdir -p phidra
+  
+  # Copy the phidra directory contents to the task directory
+  cp -r /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/* phidra/
+  
+  # Debugging: List the contents of the phidra directory in the task's working directory
+  ls -al phidra
+  
+  cd phidra
+  python phidra_run.py         -i /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna         -db /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta         -pfam /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database         -ida /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv         -f PolA         -o phidra_output_test/
+
+Command exit status:
+  1
+
+Command output:
+  total 432
+  drwxr-sr-x 6 nolanv polson   226 Apr  5 13:02 .
+  drwxr-sr-x 3 nolanv polson   205 Apr  5 13:02 ..
+  drwxr-sr-x 2 nolanv polson   190 Apr  5 13:02 bin
+  -rw-r--r-- 1 nolanv polson 35149 Apr  5 13:02 LICENSE
+  drwxr-sr-x 2 nolanv polson   188 Apr  5 13:02 pfam_database
+  -rwxr-xr-x 1 nolanv polson 10917 Apr  5 13:02 phidra_run.py
+  -rw-r--r-- 1 nolanv polson  8616 Apr  5 13:02 README.md
+  -rw-r--r-- 1 nolanv polson    43 Apr  5 13:02 requirements.txt
+  drwxr-sr-x 5 nolanv polson    85 Apr  5 13:02 test_data
+  drwxr-sr-x 5 nolanv polson    99 Apr  5 13:02 test_results
+  Running /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna with the following parameters:
+    Input FASTA: /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna
+    Subject DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta
+    Pfam HMM DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+    IDA File: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv
+    Output Directory: phidra_output_test/
+    Function: PolA
+    Threads: 2
+  =======================================================================================
+  Running analysis for PolA sequences using /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv as domain validation
+  [1/8] Processing Inital Search: mmseqs createdb /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta phidra_output_test/PolA/subject_db/PolA_db
+  [2/8] Processing Inital Search: mmseqs createindex phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/subject_db/tmp
+  [3/8] Processing Inital Search: mmseqs easy-search -e 1E-3 --threads 2 /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/tmp
+  [4/8] Processing Inital Search: python phidra/bin/mmseqs_tophit_calculation.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Bitscore.tsv
+  [5/8] Processing Inital Search: python phidra/bin/generate_tophit_fasta.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa
+  [6/8] Processing Inital Search: python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+
+Command error:
+  total 432
+  drwxr-sr-x 6 nolanv polson   226 Apr  5 13:02 .
+  drwxr-sr-x 3 nolanv polson   205 Apr  5 13:02 ..
+  drwxr-sr-x 2 nolanv polson   190 Apr  5 13:02 bin
+  -rw-r--r-- 1 nolanv polson 35149 Apr  5 13:02 LICENSE
+  drwxr-sr-x 2 nolanv polson   188 Apr  5 13:02 pfam_database
+  -rwxr-xr-x 1 nolanv polson 10917 Apr  5 13:02 phidra_run.py
+  -rw-r--r-- 1 nolanv polson  8616 Apr  5 13:02 README.md
+  -rw-r--r-- 1 nolanv polson    43 Apr  5 13:02 requirements.txt
+  drwxr-sr-x 5 nolanv polson    85 Apr  5 13:02 test_data
+  drwxr-sr-x 5 nolanv polson    99 Apr  5 13:02 test_results
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+  Running /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna with the following parameters:
+    Input FASTA: /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna
+    Subject DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta
+    Pfam HMM DB: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+    IDA File: /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv
+    Output Directory: phidra_output_test/
+    Function: PolA
+    Threads: 2
+  =======================================================================================
+  Running analysis for PolA sequences using /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pola_PF00476_ida_file.tsv as domain validation
+  [1/8] Processing Inital Search: mmseqs createdb /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/uniprotkb_DNA_polymerase_A_plus_BATS_his.fasta phidra_output_test/PolA/subject_db/PolA_db
+  [2/8] Processing Inital Search: mmseqs createindex phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/subject_db/tmp
+  [3/8] Processing Inital Search: mmseqs easy-search -e 1E-3 --threads 2 /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/subject_db/PolA_db phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/tmp
+  [4/8] Processing Inital Search: python phidra/bin/mmseqs_tophit_calculation.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_results.m8 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Bitscore.tsv
+  [5/8] Processing Inital Search: python phidra/bin/generate_tophit_fasta.py phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.tsv /mnt/VEIL/users/nolanv/pipeline_project/ENA/ENA_2025_genomes.fna phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa
+  [6/8] Processing Inital Search: python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database
+  Error executing python phidra/bin/pfam_scan.py -out phidra_output_test/PolA/pfam_domain_results/initial_search/pfam_coverage_report.tsv -outfmt tsv -cpu 2 phidra_output_test/PolA/mmseqs_results/initial_search/PolA_TopHit_Evalue.fa /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/phidra/pfam_database: 
+
+Work dir:
+  /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/cf/448300a93c1927abb5c68bed678ebf
+
+Tip: when you have fixed the problem you can continue the execution adding the option `-resume` to the run command line
+
+ -- Check '.nextflow.log' file for details
+
