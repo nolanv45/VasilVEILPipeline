@@ -7,7 +7,7 @@
     BASEDIR="$1"
 
     # MARKER GENES
-    PROTEIN="POL"
+    PROTEIN="POL RNR"
     #"RNR POL RecA UvsX RecB RecD PcrA UvrD Dda UvsW UvrB RecG SNF2 Gp4 Gp41 DnaB"
 
     # input directory and file for query sequences
@@ -41,7 +41,7 @@
     #clustalo, mafft
 
     #PASV FILE LOCATIONS
-    PASV_DIR="pasv"
+    PASV_DIR="pasv" 
 
     #RNR
     RNR_ALIGN=rnr__classIa_classII__best_practices.fa
@@ -223,50 +223,57 @@
     ${BASEDIR}/${OUTDIR}/${p}_putative.pasv_signatures.tsv
     echo "renamed output file"
 
-    echo "Filter putative proteins to those with cat sites and roi: ${p}"
-    awk 'NR==1 {print }; \
-    '"${!PASV_VER}"' {print }' \
+   #  echo "Filter putative proteins to those with cat sites and roi: ${p}"
+   #  awk 'NR==1 {print }; \
+   #  '"${!PASV_VER}"' {print }' \
+   #  ${BASEDIR}/${OUTDIR}/${p}_putative.pasv_signatures.tsv \
+   #  > ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv
+
+
+   python /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv_post.py \
     ${BASEDIR}/${OUTDIR}/${p}_putative.pasv_signatures.tsv \
-    > ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv
+    ${BASEDIR}/${OUTDIR}/${p}_pasv_boxplots.png \
+    ${p}
 
-    cut -d$'\t' -f 1 ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv | \
-    sort -u > ${BASEDIR}/${OUTDIR}/${p}_validated_orfids.txt
 
-    seqkit grep -f ${BASEDIR}/${OUTDIR}/${p}_validated_orfids.txt \
-    ${BASEDIR}/${INPUT_DIR}/${!INPUT_FILE}.${INPUT_EXT} \
-    -o ${BASEDIR}/${OUTDIR}/${p}_validated.${INPUT_EXT}
+   #  cut -d$'\t' -f 1 ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv | \
+   #  sort -u > ${BASEDIR}/${OUTDIR}/${p}_validated_orfids.txt
 
-    echo "Filter putative proteins to those with cat sites: ${p}"
-    awk 'NR==1 {print }; \
-    '"${!NO_ROI}"' {print }' \
-    ${BASEDIR}/${OUTDIR}/${p}_putative.pasv_signatures.tsv \
-    > ${BASEDIR}/${OUTDIR}/${p}_cat_sites_regardless_roi.pasv_signatures.tsv
+   #  seqkit grep -f ${BASEDIR}/${OUTDIR}/${p}_validated_orfids.txt \
+   #  ${BASEDIR}/${INPUT_DIR}/${!INPUT_FILE}.${INPUT_EXT} \
+   #  -o ${BASEDIR}/${OUTDIR}/${p}_validated.${INPUT_EXT}
 
-    if [ ${p}="RNR" ]
-    then
-    echo "Count number of proteins with 438 amino acid"
-    awk '{count[$6]++} \
-    END {for (word in count) print word, count[word]}' \
-    ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv \
-    | tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
-    fi
+   #  echo "Filter putative proteins to those with cat sites: ${p}"
+   #  awk 'NR==1 {print }; \
+   #  '"${!NO_ROI}"' {print }' \
+   #  ${BASEDIR}/${OUTDIR}/${p}_putative.pasv_signatures.tsv \
+   #  > ${BASEDIR}/${OUTDIR}/${p}_cat_sites_regardless_roi.pasv_signatures.tsv
 
-    if [ ${p}="POL" ]
-    then
-    echo "Count number of proteins with 762 amino acid"
-    awk '{count[$5]++} \
-    END {for (word in count) print word, count[word]}' \
-    ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv \
-    | tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
-    fi
+   #  if [ ${p}="RNR" ]
+   #  then
+   #  echo "Count number of proteins with 438 amino acid"
+   #  awk '{count[$6]++} \
+   #  END {for (word in count) print word, count[word]}' \
+   #  ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv \
+   #  | tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
+   #  fi
 
-    echo "Count putative and valid sequences: ${p}"
-    seqkit stats -T -a ${BASEDIR}/${INPUT_DIR}/${!INPUT_FILE}.${INPUT_EXT} | \
-    tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
-    seqkit stats -T -a ${BASEDIR}/${OUTDIR}/${p}_validated.${INPUT_EXT} | \
-    tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
+   #  if [ ${p}="POL" ]
+   #  then
+   #  echo "Count number of proteins with 762 amino acid"
+   #  awk '{count[$5]++} \
+   #  END {for (word in count) print word, count[word]}' \
+   #  ${BASEDIR}/${OUTDIR}/${p}_validated.pasv_signatures.tsv \
+   #  | tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
+   #  fi
 
-    echo "done: ${p}"
+   #  echo "Count putative and valid sequences: ${p}"
+   #  seqkit stats -T -a ${BASEDIR}/${INPUT_DIR}/${!INPUT_FILE}.${INPUT_EXT} | \
+   #  tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
+   #  seqkit stats -T -a ${BASEDIR}/${OUTDIR}/${p}_validated.${INPUT_EXT} | \
+   #  tee -a ${BASEDIR}/${OUTDIR}/${p}_stats.tsv
+
+   #  echo "done: ${p}"
 
     done
 
