@@ -86,3 +86,104 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# import sys
+# import os
+
+# def parse_contig_orf(query_id):
+#     parts = query_id.split('_')
+#     contig_id = '_'.join(parts[:-3])
+#     return contig_id, query_id
+
+# def get_signature(target_id):
+#     return target_id.split('_')[0]
+
+# def process_files(file1_path, file2_path):
+#     primary_mappings = {}
+#     results = []
+#     unique_file2_orfs = set()
+    
+#     # Process first file and store all its Query_IDs
+#     file1_queries = set()
+#     print(f"Reading {file1_path} ...")
+#     with open(file1_path, 'r') as f:
+#         try:
+#             next(f)
+#         except StopIteration:
+#             print(f"File {file1_path} is empty!")
+#             return [], set()
+#         for line in f:
+#             parts = line.strip().split('\t')
+#             if len(parts) < 2:
+#                 continue
+#             query_id = parts[0]
+#             target_id = parts[1]
+            
+#             file1_queries.add(query_id)
+#             contig_id, orf_id = parse_contig_orf(query_id)
+#             signature = get_signature(target_id)
+            
+#             primary_mappings[query_id] = signature
+#             results.append((contig_id, orf_id, signature, "Initial"))
+    
+#     print(f"Read {len(file1_queries)} queries from {file1_path}")
+
+#     # Process second file
+#     print(f"Reading {file2_path} ...")
+#     with open(file2_path, 'r') as f:
+#         try:
+#             next(f)
+#         except StopIteration:
+#             print(f"File {file2_path} is empty!")
+#             return results, unique_file2_orfs
+#         for line in f:
+#             parts = line.strip().split('\t')
+#             if len(parts) < 2:
+#                 continue
+#             query_id = parts[0]
+#             target_id = parts[1]
+            
+#             if query_id not in file1_queries:
+#                 unique_file2_orfs.add(query_id)
+            
+#             if query_id in primary_mappings:
+#                 continue
+                
+#             if target_id in primary_mappings:
+#                 contig_id, orf_id = parse_contig_orf(query_id)
+#                 signature = primary_mappings[target_id]
+#                 results.append((contig_id, orf_id, signature, "Recursive"))
+    
+#     print(f"Read {len(unique_file2_orfs)} unique queries from {file2_path}")
+#     return results, unique_file2_orfs
+
+# def main():
+#     if len(sys.argv) != 4:
+#         print("Usage: python script.py <top_hit_evalue_initial_search.tsv> <top_hit_evalue_recursive_search.tsv> <output_file>")
+#         sys.exit(1)
+        
+#     file1_path = sys.argv[1]
+#     file2_path = sys.argv[2]
+#     output_file = sys.argv[3]
+
+#     # Check if files exist
+#     if not os.path.isfile(file1_path):
+#         print(f"File not found: {file1_path}")
+#         sys.exit(1)
+#     if not os.path.isfile(file2_path):
+#         print(f"File not found: {file2_path}")
+#         sys.exit(1)
+    
+#     results, unique_file2_orfs = process_files(file1_path, file2_path)
+    
+#     if not results:
+#         print("No results to write.")
+#     else:
+#         with open(output_file, 'w') as f:
+#             f.write("Genome_ID\tORF_ID\tIdentified\tsignature\n")
+#             for contig_id, orf_id, signature, identified in results:
+#                 f.write(f"{contig_id}\t{orf_id}\t{identified}\t{signature}\n")
+#         print(f"\nResults have been saved to: {output_file}")
+
+# if __name__ == "__main__":
+#     main()
