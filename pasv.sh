@@ -7,7 +7,7 @@
     BASEDIR="$1"
 
     # MARKER GENES
-    PROTEIN="POL RNR"
+    PROTEIN="POL"
     #"RNR POL RecA UvsX RecB RecD PcrA UvrD Dda UvsW UvrB RecG SNF2 Gp4 Gp41 DnaB"
 
     # input directory and file for query sequences
