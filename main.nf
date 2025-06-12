@@ -145,8 +145,18 @@ process PASV {
     # Create directories
     mkdir -p \$WORK_DIR/pasv_output/{input,output,pasv}
 
+    # Define mapping
+    if [ "${protein}" == "PolA" ]; then
+        mapped_name="POL_putative"
+    elif [ "${protein}" == "RNR" ]; then
+        mapped_name="RNR_putative"
+    else
+        echo "Error: Unknown protein ${protein}"
+        exit 1
+    fi
+
     # Copy input file with mapped name
-    cp ${fasta} "\$WORK_DIR/pasv_output/input/${protein}.fasta"
+    cp ${fasta} "\$WORK_DIR/pasv_output/input/\${mapped_name}.fasta"
 
     # Run PASV
     /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv.sh \$WORK_DIR/pasv_output
@@ -179,7 +189,9 @@ process annotate_top_hits {
     debug true
 
     input:
-    tuple val(protein), path(initial_search), path(recursive_search)
+    tuple val(protein), 
+          path(initial_search, stageAs: { it[0] + "_initial.tsv" }), 
+          path(recursive_search, stageAs: { it[0] + "_recursive.tsv" })
 
     output:
     path "annotated_hits_${protein}.tsv"
@@ -189,6 +201,11 @@ process annotate_top_hits {
     #!/usr/bin/env python3
 import sys
 import os
+
+protein = "${protein}"
+file1_path = f"{protein}_initial.tsv"
+file2_path = f"{protein}_recursive.tsv"
+output_file = f"annotated_hits_{protein}.tsv"
 
 def parse_contig_orf(query_id):
     parts = query_id.split("_")
@@ -202,13 +219,11 @@ def process_files(file1_path, file2_path):
     primary_mappings = {}
     results = []
     unique_file2_orfs = set()
-    
-    # Process first file and store all its Query_IDs
     file1_queries = set()
     with open(file1_path, "r") as f:
         next(f)
         for line in f:
-            parts = line.strip().split("\\t")  # Note the escaped tab
+            parts = line.strip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
             file1_queries.add(query_id)
@@ -220,7 +235,7 @@ def process_files(file1_path, file2_path):
     with open(file2_path, "r") as f:
         next(f)
         for line in f:
-            parts = line.strip().split("\\t")  # Note the escaped tab
+            parts = line.strip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
             if query_id not in file1_queries:
@@ -231,69 +246,58 @@ def process_files(file1_path, file2_path):
                 contig_id, orf_id = parse_contig_orf(query_id)
                 signature = primary_mappings[target_id]
                 results.append((contig_id, orf_id, signature, "Recursive"))
-    
     return results, unique_file2_orfs
 
 def main():
-    file1_path = "${initial_search}"  # Will resolve to "initial_PolB.tsv"
-    file2_path = "${recursive_search}"  # Will resolve to "recursive_PolB.tsv"
-    output_file = "annotated_hits_${protein_name}.tsv"  # Use Nextflow variable
-
     print("DEBUG - Current directory:", os.getcwd())
     print("DEBUG - Files in directory:", os.listdir("."))
     print("DEBUG - Processing files:", file1_path, file2_path)
-    
     results, unique_file2_orfs = process_files(file1_path, file2_path)
-    
     with open(output_file, "w") as f:
         f.write("Genome_ID\\tORF_ID\\tIdentified\\tsignature\\n")
         for contig_id, orf_id, signature, identified in results:
             f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\n")
-    
     print(f"Results have been saved to: {output_file}")
 
 if __name__ == "__main__":
     main()
-"""
+    """
 }
 
 
 // Input preparation workflow
 workflow {
-    // Create input channel
+    // 1. Input channel from config
     Channel
         .fromList(params.proteins)
-        .view { config -> 
-            "[DEBUG] Processing: ${config.protein}" 
-        }
+        .view { config -> "[DEBUG] Input config: ${config}" }
         .set { ch_input }
 
-    // Run PHIDRA and branch its output
+    // 2. Run PHIDRA
     PHIDRA(ch_input)
-        .branch { 
-            protein, fasta, init_search, rec_search ->
-                def name = protein.toLowerCase()
-                println "[DEBUG] Branching ${protein}"
-                
-                annotation: name =~ /polb|helicase/ ? 
-                    tuple(protein, init_search, rec_search) : null
-                    
-                pasv: name =~ /pola|rnr/ ? 
-                    tuple(protein, fasta) : null
+        .view { "[DEBUG] PHIDRA output: $it" }
+        .branch { protein, fasta, init_search, rec_search ->
+            def name = protein.toLowerCase()
+            annotation: name in ['polb', 'helicase']
+            pasv: name in ['pola', 'rnr']
         }
-        .set { ch_branched }
+        .set { branched }
 
-    // Handle annotation path - only process non-null values
-    ch_branched.annotation
-        .filter { it != null }  // Remove null values
-        .tap { x -> println "[DEBUG] Annotation input: $x" }
-        .ifEmpty { println "[DEBUG] No proteins for annotation" }
+    // 3. Annotation path
+    branched.annotation
+        .filter { it != null }
+        .map { protein, fasta, init_search, rec_search ->
+            tuple(protein, init_search, rec_search)
+        }
+        .view { "[DEBUG] To annotate_top_hits: $it" }
         | annotate_top_hits
 
-    // Handle PASV path - only process non-null values
-    ch_branched.pasv
-        .filter { it != null }  // Remove null values
-        .tap { x -> println "[DEBUG] PASV input: $x" }
-        .ifEmpty { println "[DEBUG] No proteins for PASV" }
+    // 4. PASV path
+    branched.pasv
+        .filter { it != null }
+        .map { protein, fasta, init_search, rec_search ->
+            tuple(protein, fasta)  // Only emit protein and fasta for PASV
+        }
+        .view { "[DEBUG] To PASV: $it" }
         | PASV
 }
