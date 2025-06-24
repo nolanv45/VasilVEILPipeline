@@ -1,54 +1,45 @@
 nextflow.enable.dsl=2
 
-// process PHIDRA {
-//     conda "/home/nolanv/.conda/envs/phidra"
-
-//     input:
-//     val protein_config
-
-
-//     output:
-//     path "*", emit: "phidra_output"
-
-//     script:
-//     """
-//     source /etc/profile.d/conda.sh
-//     conda activate /home/nolanv/.conda/envs/phidra
-
-//     WORK_DIR=\$PWD
-
-//     cd ${params.phidra_dir}
-
-//     python phidra_run.py \
-//         -i ${params.input_fasta} \
-//         -db ${protein_config.subjectDB} \
-//         -pfam ${params.pfamDB} \
-//         -ida ${protein_config.pfamDomain} \
-//         -f ${protein_config.protein} \
-//         -o \$WORK_DIR \
-//         -t 24
-//     """
-// }
 
 process PHIDRA {
     conda "/home/nolanv/.conda/envs/phidra"
 
     input:
-    val protein_config
-
+        val protein_config
 
     output:
-    tuple val(protein_config.protein), 
-          path("*/final_results/pfam_validated_full_protein.fa"), 
-          path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"), 
-          path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv")
+        tuple val(protein_config.protein), 
+              path("*/final_results/pfam_validated_full_protein.fa"), 
+              path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"), 
+              path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv")
 
     script:
     """
+    WORK_DIR=\$PWD
+    # Clean input fasta headers - only replace dots in headers
+    echo "[INFO] Cleaning input FASTA headers..."    
+    # sed '/^>/ s/\\./-/g' ${params.input_fasta} > cleaned_input_tmp.fasta
+
+    # Remove asterisks from sequences
+    echo "[INFO] Removing asterisks from sequences..."
+    # sed -i 's/\\*//g' cleaned_input_tmp.fasta
+
+    # Filter sequences to minimum length 200 using seqkit
+    # seqkit seq -m 200 cleaned_input_tmp.fasta -o cleaned_input.fasta
+
+    # Clean subjectDB fasta headers - only replace dots in headers
+    # sed '/^>/ s/\\./-/g' ${protein_config.subjectDB} > cleaned_subjectDB_tmp.fasta
+
+    # Remove asterisks from subjectDB sequences
+    # sed -i 's/\\*//g' cleaned_subjectDB_tmp.fasta
+
+    # Filter subjectDB sequences to minimum length 200 (optional)
+    # seqkit seq -m 200 cleaned_subjectDB_tmp.fasta -o cleaned_subjectDB.fasta
+
+
     source /etc/profile.d/conda.sh
     conda activate /home/nolanv/.conda/envs/phidra
 
-    WORK_DIR=\$PWD
 
     cd ${params.phidra_dir}
 
@@ -64,243 +55,6 @@ process PHIDRA {
 }
 
 
-
-// process preparePASVInput {
-//     input:
-//     path phidra_output
-
-//     output:
-//     path "pasv_ready"
-
-//     script:
-//     """
-//     mkdir -p pasv_ready
-//     """
-// }
-
-// process PASV {
-//     conda "/home/nolanv/.conda/envs/phidra"
-
-//     input:
-//     path phidra_dirs
-
-//     output:
-//     path "pasv_output/", emit: "pasv_output"
-
-//     script:
-//     """
-//     # Use current working directory
-//     WORK_DIR=\$(pwd)
-
-//     mkdir -p \$WORK_DIR/pasv_output/input
-//     mkdir -p \$WORK_DIR/pasv_output/output
-//     mkdir -p \$WORK_DIR/pasv_output/pasv
-
-
-//     declare -A MAP=(
-//         [PolA]="POL_putative"
-//         [RNR]="RNR_putative"
-//     )
-
-//     for dir in ${phidra_dirs}; do
-//         protein=\$(basename "\$dir")
-
-//         fasta_file="\$dir/final_results/pfam_validated_full_protein.fa"
-
-//         mapped_name="\${MAP[\$protein]}"
-
-//         if [[ -z "\$mapped_name" ]]; then
-//             echo "Warning: Protein "\$protein" not recognized in mapping. Skipping."
-//             continue
-//         fi
-
-        
-
-//         if [[ -f "\$fasta_file" ]]; then
-//             cp "\$fasta_file" "\$WORK_DIR/pasv_output/input/\$mapped_name.fasta"
-//         else
-//             echo "Warning: File not found: \$fasta_file"
-//         fi
-//     done
-
-//     /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv.sh \$WORK_DIR/pasv_output
-//     """
-
-// }
-
-// process PASV {
-//     conda "/home/nolanv/.conda/envs/phidra"
-
-//     input:
-//     tuple val(protein), path(fasta)
-
-//     output:
-//     path "pasv_output/", emit: "pasv_output"
-
-//     script:
-//     """
-//     # Use current working directory
-//     WORK_DIR=\$(pwd)
-
-//     # Create directories
-//     mkdir -p \$WORK_DIR/pasv_output/{input,output,pasv}
-
-//     # Define mapping
-//     if [ "${protein}" == "PolA" ]; then
-//         mapped_name="POL_putative"
-//     elif [ "${protein}" == "RNR" ]; then
-//         mapped_name="RNR_putative"
-//     else
-//         echo "Error: Unknown protein ${protein}"
-//         exit 1
-//     fi
-
-//     # Copy input file with mapped name
-//     cp ${fasta} "\$WORK_DIR/pasv_output/input/\${mapped_name}.fasta"
-
-//     # Run PASV
-//     /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv.sh \$WORK_DIR/pasv_output
-//     """
-// }
-
-
-// process PASV {
-//     conda "/home/nolanv/.conda/envs/phidra"
-    
-//     input:
-//     tuple val(protein), path(fasta)
-
-//     output:
-//     tuple val(protein), path("pasv_output")
-
-//     script:
-//     """
-//     #!/usr/bin/env bash
-//     set -e  # Exit on error
-
-//     # Setup directories
-//     mkdir -p pasv_output/{input,output,pasv}
-
-//     # Convert protein name to lowercase for comparison
-//     protein_lower=\$(echo "${protein}" | tr '[:upper:]' '[:lower:]')
-
-//     # Map protein names to PASV expected names and signatures
-//     if [ "\${protein_lower}" == "pola" ]; then
-//         mapped_name="POL_putative"
-//     elif [ "\${protein_lower}" == "rnr" ]; then
-//         mapped_name="RNR_putative"
-//     else
-//         echo "Error: Unknown protein ${protein}"
-//         exit 1
-//     fi
-
-//     # Copy and prepare input files
-//     cp ${fasta} "pasv_output/input/\${mapped_name}.fasta"
-//     cp ${align_refs} "pasv_output/input/align_refs.fa"
-
-//     #################################################################################
-//     ### SCRIPT SETTINGS
-
-//     ## SOFTWARE REQUIREMENTS
-
-//     ## FILE LOCATIONS
-
-//     # MARKER GENES
-//     PROTEIN="${protein}"
-//     #"RNR POL RecA UvsX RecB RecD PcrA UvrD Dda UvsW UvrB RecG SNF2 Gp4 Gp41 DnaB"
-
-
-//     # reference directory for PASV alignment references
-//     REF_DIR=/mnt/VEIL/references/pasv/pasv_profile
-//     # output
-//     OUTDIR="output"
-
-//     ## OTHER PARAMETERS
-//     ALIGNER=mafft
-//     #clustalo, mafft
-
-//     #PASV FILE LOCATIONS
-//     PASV_DIR="pasv" 
-
-//     #RNR
-//     RNR_ALIGN=rnr__classIa_classII__best_practices.fa
-//     RNR_ROI_START=437
-//     RNR_ROI_END=625
-//     RNR_CAT_SITES="437,439,441,462,438"
-//     RNR_PASV_VER="\$2 ~/N/ && \$3 ~/C/ && \$4 ~/E/ && \$5 ~/C/ && \$10 ~/Both/"
-//     RNR_NO_ROI="\$2 ~/N/ && \$3 ~/C/ && \$4 ~/E/ && \$5 ~/C/ "
-
-//     #POL
-//     POL_ALIGN=pola_16_k12_ref.fa
-//     POL_ROI_START=521
-//     POL_ROI_END=923
-//     POL_CAT_SITES="668,705,758,762"
-//     POL_PASV_VER="\$2 ~/R/ && \$3 ~/D/ && \$4 ~/K/ && \$9 ~/Both/"
-//     POL_NO_ROI="\$2 ~/R/ && \$3 ~/D/ && \$4 ~/K/"
-
-//     #################################################################################
-//     ### SCRIPT BODY
-
-//     ## COMMANDS TO RUN
-
- 
-
-//     # Make sure pasv is available
-//     if [ ! -f pasv_output/pasv/pasv ]
-//     then
-//     cd pasv_output/pasv
-//     wget https://github.com/mooreryan/pasv/releases/download/2.0.2/pasv-2.0.2-alpine-static.zip
-//     unzip pasv_output/pasv/pasv-2.0.2-alpine-static.zip
-//     chmod 755 pasv_output/pasv/pasv
-//     ./pasv --help
-//     cd pasv_output/output
-//     else
-//     fi
-
-//     for p in \${PROTEIN}
-//     do
-//     INPUT_FILE=\${p}_INPUT
-//     ALIGN=\${p}_ALIGN
-//     ROI_START=\${p}_ROI_START
-//     ROI_END=\${p}_ROI_END
-//     CAT_SITES=\${p}_CAT_SITES
-//     PRED_SITE=\${p}_PRED_SITE
-//     PASV_VER=\${p}_PASV_VER
-//     CTG_ID_COLUMN=\${p}_CTG_ID_COLUMN
-//     NO_ROI=\${p}_NO_ROI
-
-//     echo "Generate PASV signatures: \${p}"
-//     pasv_output/pasv/pasv msa \
-//     --outdir=pasv_output/output \
-//     --force \
-//     --roi-start=\${!ROI_START} \
-//     --roi-end=\${!ROI_END} \
-//     --jobs=20 \
-//     --aligner=\${ALIGNER} \
-
-    
-//     pasv_output/input/\${!mapped_name}.fasta \
-//     ${REF_DIR}/${!ALIGN} \
-//     ${!CAT_SITES}
-
-//     echo "Rename output file: \${p}"
-//     mv pasv_output/output/\${!mapped_name}.pasv_signatures.tsv \
-//     pasv_output/output/\${p}_putative.pasv_signatures.tsv
-//     echo "renamed output file"
-
-//    python /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv_post.py \
-//     pasv_output/output/\${p}_putative.pasv_signatures.tsv \
-//     pasv_output/output/\${p}_pasv_boxplots.png \
-//     \${p}
-
-
-
-//     done
-
-//     echo "=====JOB FINISH====="
-//     """
-// }
-
 process PASV {
     conda "/home/nolanv/.conda/envs/phidra"
     cpus 4
@@ -309,7 +63,7 @@ process PASV {
     tuple val(protein), path(fasta), path(align_refs)
 
     output:
-    tuple val(protein), path("pasv_output/output/${protein}_putative.pasv_signatures.tsv")
+    tuple val(protein), file("pasv_output/output/${protein}_putative.pasv_signatures.tsv")
 
     script:
     """
@@ -398,7 +152,6 @@ process PASV_post {
 #!/usr/bin/env python
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import sys
 
 pasv_signatures = "${pasv_signatures}"
@@ -487,12 +240,98 @@ boxplots(df, tally, "${protein}_pasv_boxplots.png", "${protein}")
 
 
 
-process cleanHeaders {
+process STANDARDIZE_OUTPUTS {
+    debug true
+    publishDir "${params.outdir}/combined", mode: 'copy'
+    conda "/home/nolanv/.conda/envs/phidra"
+
+    input:
+    tuple val(proteins), file('*.tsv')  // Accept multiple TSV files as input
+
+    output:
+    file "combined_results.tsv"
+
     script:
     """
-    echo "cleanHeaders placeholder"
+    #!/usr/bin/env python3
+    import pandas as pd
+    import glob
+    import os
+
+    # Get list of input TSV files
+    input_files = sorted(glob.glob('*.tsv'))
+    proteins = "${proteins}".strip('[]').split(', ')
+    
+    print(f"Processing {len(input_files)} files for proteins: {proteins}")
+
+    def calculate_orf_length(orf_id):
+        try:
+            parts = orf_id.split('_')
+            return (abs(int(parts[2]) - int(parts[1])) + 1) // 3
+        except (IndexError, ValueError) as e:
+            print(f"Warning: Could not calculate length for {orf_id}: {str(e)}")
+            return None
+
+    all_results = []
+    
+    # Use zip to pair proteins with files directly
+    for protein, input_file in zip(proteins, input_files):
+        try:
+            print(f"Processing {protein} file: {input_file}")
+            df = pd.read_csv(input_file, sep='\\t')
+            
+            if 'Genome_ID' in df.columns and 'Identified' in df.columns:
+                print(f"Detected PHIDRA format for {protein}")
+                df['ORF_length'] = df['ORF_ID'].apply(calculate_orf_length)
+                df['Source'] = 'PHIDRA'
+                df['Protein'] = protein
+                if 'signature' not in df.columns:
+                    df['signature'] = ''
+                
+            elif 'name' in df.columns and 'spans' in df.columns:
+                print(f"Detected PASV format for {protein}")
+                df['Genome_ID'] = df['name'].apply(lambda x: '_'.join(x.split('_')[:-3]))
+                df['ORF_ID'] = df['name']
+                df['ORF_length'] = df['ORF_ID'].apply(calculate_orf_length)
+                df['Identified'] = 'PASV_' + df['spans'].fillna('Unknown')
+                df['Source'] = 'PASV'
+                df['Protein'] = protein
+                df['signature'] = df['signature'].fillna('')
+            
+            df = df[['Genome_ID', 'ORF_ID', 'ORF_length', 'Identified', 'signature', 'Source', 'Protein']]
+            all_results.append(df)
+            print(f"Successfully processed {protein} with {len(df)} entries")
+            
+        except Exception as e:
+            print(f"Error processing {protein}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    if all_results:
+        # Combine all results and sort
+        final_df = pd.concat(all_results, ignore_index=True)
+        final_df = final_df.sort_values(['Protein', 'Genome_ID', 'ORF_ID'])
+        
+        # Print summary statistics
+        print("\\nSummary Statistics:")
+        print(f"Total entries: {len(final_df)}")
+        print("\\nEntries by Source and Protein:")
+        print(final_df.groupby(['Source', 'Protein']).size())
+        
+        # Write combined results
+        final_df.to_csv("combined_results.tsv", sep='\\t', index=False)
+        print(f"Written {len(final_df)} total entries to combined_results.tsv")
+    else:
+        # Create empty file with headers if no results
+        pd.DataFrame(columns=['Genome_ID', 'ORF_ID', 'ORF_length', 'Identified', 'signature', 'Source', 'Protein']).to_csv(
+            "combined_results.tsv", sep='\\t', index=False)
+        print("No results to process, created empty file with headers")
     """
 }
+
+
+
 
 
 
@@ -507,22 +346,33 @@ process annotate_top_hits {
 
     input:
     tuple val(protein), 
+          path(pfam_validated_fasta),
           path(initial_search, stageAs: 'initial_search.tsv'), 
           path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
-    path "annotated_hits_${protein}.tsv"
+    tuple val(protein), file("${protein}_annotated_hits.tsv")
 
     script:
     """
     #!/usr/bin/env python3
 import sys
 import os
+from Bio import SeqIO
 
 protein = "${protein}"
+pfam_validated_fasta = "${pfam_validated_fasta}"
 file1_path = "initial_search.tsv"
 file2_path = "recursive_search.tsv"
-output_file = "annotated_hits_${protein}.tsv"
+output_file = "${protein}_annotated_hits.tsv"
+
+def load_validated_ids():
+    validated_ids = set()
+    with open(pfam_validated_fasta, 'r') as f:
+        for record in SeqIO.parse(f, 'fasta'):
+            validated_ids.add(record.id)
+    print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
+    return validated_ids
 
 def parse_contig_orf(query_id):
     parts = query_id.split("_")
@@ -532,7 +382,7 @@ def parse_contig_orf(query_id):
 def get_signature(target_id):
     return target_id.split("_")[0]
 
-def process_files(file1_path, file2_path):
+def process_files(file1_path, file2_path, validated_ids):
     primary_mappings = {}
     results = []
     unique_file2_orfs = set()
@@ -543,11 +393,12 @@ def process_files(file1_path, file2_path):
             parts = line.strip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
-            file1_queries.add(query_id)
-            contig_id, orf_id = parse_contig_orf(query_id)
-            signature = get_signature(target_id)
-            primary_mappings[query_id] = signature
-            results.append((contig_id, orf_id, signature, "Initial"))
+            if query_id in validated_ids:
+                file1_queries.add(query_id)
+                contig_id, orf_id = parse_contig_orf(query_id)
+                signature = get_signature(target_id)
+                primary_mappings[query_id] = signature
+                results.append((contig_id, orf_id, signature, "Initial"))
 
     with open(file2_path, "r") as f:
         next(f)
@@ -555,21 +406,23 @@ def process_files(file1_path, file2_path):
             parts = line.strip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
-            if query_id not in file1_queries:
-                unique_file2_orfs.add(query_id)
-            if query_id in primary_mappings:
-                continue
-            if target_id in primary_mappings:
-                contig_id, orf_id = parse_contig_orf(query_id)
-                signature = primary_mappings[target_id]
-                results.append((contig_id, orf_id, signature, "Recursive"))
+            if query_id in validated_ids:
+                if query_id not in file1_queries:
+                    unique_file2_orfs.add(query_id)
+                if query_id in primary_mappings:
+                    continue
+                if target_id in primary_mappings:
+                    contig_id, orf_id = parse_contig_orf(query_id)
+                    signature = primary_mappings[target_id]
+                    results.append((contig_id, orf_id, signature, "Recursive"))
     return results, unique_file2_orfs
 
 def main():
     print("DEBUG - Current directory:", os.getcwd())
+    validated_ids = load_validated_ids()
     print("DEBUG - Files in directory:", os.listdir("."))
     print("DEBUG - Processing files:", file1_path, file2_path)
-    results, unique_file2_orfs = process_files(file1_path, file2_path)
+    results, unique_file2_orfs = process_files(file1_path, file2_path, validated_ids)
     with open(output_file, "w") as f:
         f.write("Genome_ID\\tORF_ID\\tIdentified\\tsignature\\n")
         for contig_id, orf_id, signature, identified in results:
@@ -584,11 +437,8 @@ if __name__ == "__main__":
 
 // Input preparation workflow
 workflow {
-    // 1. Input channel from config
-    Channel
-        .fromList(params.proteins)
-        .view { config -> "[DEBUG] Input config: ${config}" }
-        .set { ch_input }
+    def ch_input = Channel.fromList(params.proteins)
+
 
     // 2. Run PHIDRA
     PHIDRA(ch_input)
@@ -601,28 +451,34 @@ workflow {
         .set { branched }
 
     // 3. Annotation path
-    branched.annotation
+    def ch_annotation = branched.annotation
         .filter { it != null }
         .map { protein, fasta, init_search, rec_search ->
-            tuple(protein, init_search, rec_search)
+            tuple(protein, fasta, init_search, rec_search)
         }
-        .view { "[DEBUG] To annotate_top_hits: $it" }
         | annotate_top_hits
 
     // 4. PASV path
-    branched.pasv
+    def ch_pasv = branched.pasv
         .filter { it != null }
         .map { protein, fasta, init_search, rec_search ->
             def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
             def align_refs = file(proteinConfig.pasv_align_refs)
             tuple(protein, fasta, align_refs)
         }
-        .view { "[DEBUG] To PASV: $it" }
         | PASV
-    PASV.out
-        .map { protein, pasv_signatures ->
-            tuple(protein, pasv_signatures)
+
+    // Standardize results
+    ch_annotation
+        .mix(ch_pasv)
+        .collect()
+        .map { results ->
+            def file_map = [:] // Create a map of protein -> file
+            results.collate(2).each { protein, file ->
+                file_map[protein] = file
+            }
+            tuple(file_map.keySet().toList(), file_map.values().toList())
         }
-        .view { "[DEBUG] PASV output: $it" }
-        | PASV_post
+        .view { "[DEBUG] Files for STANDARDIZE_OUTPUTS: proteins=${it[0]}, files=${it[1]}" }
+        | STANDARDIZE_OUTPUTS
 }
