@@ -3,6 +3,11 @@ nextflow.enable.dsl=2
 
 process PHIDRA {
     conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}/phidra", mode: 'copy', saveAs: { filename ->
+        if (filename.endsWith("pfam_validated_full_protein.fa")) "validated_sequences/${filename}"
+        else if (filename.contains("_TopHit_Evalue.tsv")) "mmseqs_results/${filename}"
+        else null
+    }
 
     input:
         val protein_config
@@ -58,6 +63,9 @@ process PHIDRA {
 process PASV {
     conda "/home/nolanv/.conda/envs/phidra"
     cpus 4
+    publishDir "${params.outdir}/pasv/${protein}", 
+        mode: 'copy',
+        pattern: "pasv_output/output/*.tsv"
 
     input:
     tuple val(protein), path(fasta), path(align_refs)
@@ -128,24 +136,162 @@ process PASV {
         echo "Error: PASV did not produce expected output file: \${PASV_FILE}"
         exit 1
     fi
+    """
+}
 
-    # Run post-processing (optional)
-    # Uncomment and update paths if needed
-    # python /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/pasv_post.py \\
-    #     pasv_output/output/${protein}_putative.pasv_signatures.tsv \\
-    #     pasv_output/output/${protein}_pasv_boxplots.png \\
-    #     ${protein}
+// process GENERATE_STATS {
+//     debug true
+//     conda "/home/nolanv/.conda/envs/phidra"
+//     publishDir "${params.outdir}/stats", mode: 'copy'
+
+//     input:
+//     path(input_tsv)
+
+//     output:
+//     path "protein_stats.tsv"
+
+//     script:
+//     """
+//     #!/usr/bin/env python3
+//     import pandas as pd
+//     import numpy as np
+
+//     # Read the input TSV
+//     df = pd.read_csv("${input_tsv}", sep='\\t')
+//     print(f"Processing statistics for {len(df)} entries")
+//     print(f"Columns in dataframe: {df.columns.tolist()}")
+
+//     # Calculate ORF length using the provided formula
+//     df['ORF_length'] = df['ORF_ID'].apply(
+//         lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
+//     )
+
+//     # Initialize stats list
+//     stats_data = []
+//     for genofeature in df['Genofeature'].unique():
+//         genofeature_df = df[df['Genofeature'] == genofeature]
+        
+//         for identified in genofeature_df['Identified'].unique():
+//             group = genofeature_df[genofeature_df['Identified'] == identified]
+//             lengths = group['ORF_length']
+            
+//             quartiles = lengths.quantile([0.25, 0.5, 0.75])
+//             stats_data.append({
+//                 'Genofeature': genofeature,
+//                 'Identified': identified,
+//                 'count': len(group),
+//                 'mean_length': lengths.mean(),
+//                 'min_length': lengths.min(),
+//                 'q1_length': quartiles[0.25],
+//                 'median_length': quartiles[0.5],
+//                 'q3_length': quartiles[0.75],
+//                 'max_length': lengths.max()
+//             })
+
+//     # Convert to DataFrame and save
+//     stats_df = pd.DataFrame(stats_data)
+//     stats_df = stats_df.sort_values(['Genofeature', 'Identified'])
+//     stats_df.to_csv("protein_stats.tsv", sep='\\t', index=False)
+//     """
+// }
+
+process ANALYZE_AND_PLOT {
+    debug true
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}", 
+        mode: 'copy',
+        saveAs: { filename ->
+            if (filename.endsWith('.tsv')) "phidra_analysis/stats/${filename}"
+            else if (filename.endsWith('.png')) "phidra_analysis/plots/${filename}"
+            else null
+        }
+
+    input:
+    path(input_tsv)
+
+    output:
+    path "protein_stats.tsv"
+    path "length_distribution.png"
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Read and process input data
+    df = pd.read_csv("${input_tsv}", sep='\\t')
+    print(f"Processing data with {len(df)} entries")
+
+    # Calculate ORF length if not present
+    if 'ORF_length' not in df.columns:
+        df['ORF_length'] = df['ORF_ID'].apply(
+            lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
+        )
+
+    # Generate basic statistics
+    stats = df.groupby('Genofeature').agg({
+        'ORF_length': ['count', 'mean', 'min', 'max']
+    }).reset_index()
+    
+    # Flatten column names
+    stats.columns = ['Genofeature', 'count', 'mean_length', 'min_length', 'max_length']
+    stats = stats.sort_values('Genofeature')
+    
+    # Save statistics
+    stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
+
+    # Create plot
+    plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
+    
+    # Create boxplot using seaborn
+    sns.boxplot(data=df, x='ORF_length', y='Genofeature', 
+               orient='h', color='skyblue')
+    
+    # Add annotations
+    for i, row in stats.iterrows():
+        # Count annotation (left)
+        plt.annotate(f"N={int(row['count'])}",
+            xy=(row['min_length'], i),
+            xytext=(-10, 0),
+            textcoords='offset points',
+            ha='right', va='center',
+            fontsize=9, color='blue')
+        
+        # Mean annotation (right)
+        plt.annotate(f"Mean={row['mean_length']:.1f}",
+            xy=(row['max_length'], i),
+            xytext=(10, 0),
+            textcoords='offset points',
+            ha='left', va='center',
+            fontsize=9, color='green')
+    
+    plt.title("Length Distribution by Genofeature")
+    plt.xlabel("ORF Length (aa)")
+    plt.grid(True, axis='x', linestyle='--', alpha=0.7)
+    
+    plt.tight_layout()
+    plt.savefig("length_distribution.png", bbox_inches='tight', dpi=300)
+    plt.close()
     """
 }
 
 
-process PASV_post {
+process PASV_POST {
     conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}/pasv_analysis/${protein}",
+        mode: 'copy',
+        pattern: "*.{tsv,png}"
+
     input:
-    tuple val(protein), path(pasv_signatures)
+    tuple val(protein), file(pasv_file)
 
     output:
-    path "${protein}_pasv_boxplots.png", emit: "pasv_boxplots"
+    tuple val(protein), 
+        file("${protein}_processed.tsv"),
+        file("${protein}_signature_stats.tsv"),
+        file("${protein}_signature_distribution.png")
 
     script:
     """
@@ -154,11 +300,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import sys
 
-pasv_signatures = "${pasv_signatures}"
-pasv_boxplots = "pasv_output/output/${protein}_pasv_boxplots.png"
-protein = "${protein}"
-
-def pasv_post(file):
+def pasv_post(file, protein):
     df = pd.read_csv(file, sep='\t')
 
     gapless = df[~df['signature'].str.contains('-')].copy()
@@ -178,22 +320,66 @@ def pasv_post(file):
         elif 'neither' in s:
             return 'neither'
         return 'unknown'
+
     gapless['span_class'] = gapless['spans'].apply(classify_span)
     tally = gapless.groupby(['signature', 'span_class']).size().reset_index(name='count')
-    print("Tally of signature and span class combinations:")
-    print(tally)
-    return gapless, tally
+
+    # Generate signature statistics
+    sig_stats = gapless.groupby('signature').agg({
+        'orf_length': ['count', 'mean']
+    }).reset_index()
+    sig_stats.columns = ['signature', 'count', 'mean_length']
+    sig_stats['protein'] = protein
+        
+    return gapless, tally, sig_stats
+
 
 def boxplots(df, tally, output_file, protein):
-    span_classes = df['span_class'].unique()
-    sig_counts = [tally[tally['span_class'] == span_class]['signature'].nunique() for span_class in span_classes]
-    width_ratios = [max(1, n) *0.8 for n in sig_counts]
-    fig_width = sum(width_ratios)
-
-    orf_min = df['orf_length'].min()
-    orf_max = df['orf_length'].max()
-
-    fig, axes = plt.subplots(nrows=1, ncols=len(span_classes), figsize=(fig_width, 8), sharey=True, gridspec_kw={'width_ratios': width_ratios})
+    span_classes = sorted(df['span_class'].unique())
+    sig_counts = [
+        tally[tally['span_class'] == span_class]['signature'].nunique()
+        for span_class in span_classes
+    ]
+    
+    # Calculate statistics for TSV while making plot
+    stats_data = []
+    
+    for span_class in span_classes:
+        sub = df[df['span_class'] == span_class]
+        sub_tally = (
+            tally[tally['span_class'] == span_class]
+            .sort_values(by='count', ascending=True)
+        )
+        
+        for sig in sub_tally['signature'].tolist():
+            values = sub[sub['signature'] == sig]['orf_length']
+            count = sub_tally[sub_tally['signature'] == sig]['count'].values[0]
+            mean_val = round(values.mean())
+            min_val = values.min()
+            max_val = values.max()
+            
+            stats_data.append({
+                'protein': protein,
+                'signature': sig,
+                'span_class': span_class,
+                'count': count,
+                'mean_length': mean_val,
+                'min_length': min_val,
+                'max_length': max_val
+            })
+    
+    # Create and save statistics DataFrame
+    stats_df = pd.DataFrame(stats_data)
+    stats_df.to_csv(output_file.replace('_distribution.png', '_stats.tsv'), 
+                    sep='\t', index=False)
+    
+    # Create plot with existing code
+    height_per_sig = 0.4
+    fig_height = max(8, max(sig_counts) * height_per_sig)
+    fig_width = len(span_classes) * 6
+    
+    fig, axes = plt.subplots(nrows=1, ncols=len(span_classes), 
+                            figsize=(fig_width, fig_height), sharey=True)
 
     if len(span_classes) == 1:
         axes = [axes]
@@ -201,55 +387,85 @@ def boxplots(df, tally, output_file, protein):
     for i, span_class in enumerate(span_classes):
         ax = axes[i] 
         sub = df[df['span_class'] == span_class]
+
         sub_tally = (
             tally[tally['span_class'] == span_class]
-            .sort_values(by='count', ascending=False)
+            .sort_values(by='count', ascending=True)  # Changed to True for bottom-to-top ordering
         )
         signature_sort = sub_tally['signature'].tolist()
         data = [sub[sub['signature'] == sig]['orf_length'] for sig in signature_sort]
-        ax.boxplot(data, labels=signature_sort)
-
-        ax.yaxis.set_tick_params(labelleft=True)
-        ax.set_yticks(ax.get_yticks())
-
+        
+        # Create horizontal boxplot
+        bp = ax.boxplot(data, positions=range(len(signature_sort)), 
+                       vert=False,  # Make boxplot horizontal
+                       patch_artist=True)  # Fill boxes with color
+        
+        # Set y-axis labels (signatures)
+        ax.set_yticks(range(len(signature_sort)))
+        ax.set_yticklabels(signature_sort)
+        
+        # Add counts and means
         for j, sig in enumerate(signature_sort):
             values = sub[sub['signature'] == sig]['orf_length']
             count = sub_tally[sub_tally['signature'] == sig]['count'].values
             mean_val = round(values.mean())
+            
+            # Add count annotation
             ax.annotate(f"N={count[0] if len(count) > 0 else 0}",
-                xy=(j + 1, 0), xycoords=('data', 'axes fraction'),
-                xytext=(0, -20), textcoords='offset points',
-                ha='center', va='top', fontsize=10, color='blue')
+                xy=(values.min(), j),  # Place at start of boxplot
+                xytext=(-10, 0),  # Offset to the left
+                textcoords='offset points',
+                ha='right', va='center',
+                fontsize=9, color='blue')
+            
+            # Add mean annotation
             ax.annotate(f"Mean={mean_val}",
-                        xy=(j + 1, values.max()),
-                        xytext=(0, 5), textcoords='offset points',
-                        ha='center', va='bottom', fontsize=9, color='green')
+                xy=(values.max(), j),  # Place at end of boxplot
+                xytext=(10, 0),  # Offset to the right
+                textcoords='offset points',
+                ha='left', va='center',
+                fontsize=9, color='green')
+        
+        # Customize appearance
         ax.set_title(f"Span: {span_class}")
-        ax.set_ylabel("ORF Length (aa)")
+        ax.set_xlabel("ORF Length (aa)")
+        ax.grid(True, axis='x', linestyle='--', alpha=0.7)
 
-    fig.suptitle(f"Signature Frequency of {protein}", fontsize=16)
+    # Adjust layout
+    fig.suptitle(f"Signature Distribution of {protein}", fontsize=16, y=1.02)
     plt.tight_layout()
-    plt.savefig(output_file)
+    plt.savefig(output_file, bbox_inches='tight', dpi=300)
     plt.close()
 
-# Run the functions directly
-df, tally = pasv_post("${pasv_signatures}")
-boxplots(df, tally, "${protein}_pasv_boxplots.png", "${protein}")
+
+# Process the PASV file
+protein = "${protein}"
+processed_df, tally, sig_stats = pasv_post("${pasv_file}", protein)
+
+# Save processed results
+processed_df.to_csv(f"{protein}_processed.tsv", sep='\\t', index=False)
+sig_stats.to_csv(f"{protein}_signature_stats.tsv", sep='\\t', index=False)
+
+# Generate plots
+boxplots(processed_df, tally, f"{protein}_signature_distribution.png", protein)
+
+print(f"\\nSignature Statistics Summary for {protein}:")
+print(sig_stats.sort_values('count', ascending=False))
     """
 }
 
-
-
 process STANDARDIZE_OUTPUTS {
     debug true
-    publishDir "${params.outdir}/combined", mode: 'copy'
     conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}", 
+        mode: 'copy',
+        pattern: "*.tsv"
 
     input:
-    tuple val(proteins), file('*.tsv')  // Accept multiple TSV files as input
+    tuple val(tag), path(tsv_files)
 
     output:
-    file "combined_results.tsv"
+    path "combined_results.tsv"
 
     script:
     """
@@ -258,91 +474,122 @@ process STANDARDIZE_OUTPUTS {
     import glob
     import os
 
-    # Get list of input TSV files
-    input_files = sorted(glob.glob('*.tsv'))
-    proteins = "${proteins}".strip('[]').split(', ')
+    print("Processing input files:", "${tsv_files}".split())
     
-    print(f"Processing {len(input_files)} files for proteins: {proteins}")
-
-    def calculate_orf_length(orf_id):
-        try:
-            parts = orf_id.split('_')
-            return (abs(int(parts[2]) - int(parts[1])) + 1) // 3
-        except (IndexError, ValueError) as e:
-            print(f"Warning: Could not calculate length for {orf_id}: {str(e)}")
-            return None
-
-    all_results = []
+    # Initialize empty list to store DataFrames
+    dfs = []
     
-    # Use zip to pair proteins with files directly
-    for protein, input_file in zip(proteins, input_files):
-        try:
-            print(f"Processing {protein} file: {input_file}")
-            df = pd.read_csv(input_file, sep='\\t')
-            
-            if 'Genome_ID' in df.columns and 'Identified' in df.columns:
-                print(f"Detected PHIDRA format for {protein}")
-                df['ORF_length'] = df['ORF_ID'].apply(calculate_orf_length)
-                df['Source'] = 'PHIDRA'
-                df['Protein'] = protein
-                if 'signature' not in df.columns:
-                    df['signature'] = ''
-                
-            elif 'name' in df.columns and 'spans' in df.columns:
-                print(f"Detected PASV format for {protein}")
-                df['Genome_ID'] = df['name'].apply(lambda x: '_'.join(x.split('_')[:-3]))
-                df['ORF_ID'] = df['name']
-                df['ORF_length'] = df['ORF_ID'].apply(calculate_orf_length)
-                df['Identified'] = 'PASV_' + df['spans'].fillna('Unknown')
-                df['Source'] = 'PASV'
-                df['Protein'] = protein
-                df['signature'] = df['signature'].fillna('')
-            
-            df = df[['Genome_ID', 'ORF_ID', 'ORF_length', 'Identified', 'signature', 'Source', 'Protein']]
-            all_results.append(df)
-            print(f"Successfully processed {protein} with {len(df)} entries")
-            
-        except Exception as e:
-            print(f"Error processing {protein}: {str(e)}")
-            import traceback
-            traceback.print_exc()
+    # Process each input file
+    for tsv_file in "${tsv_files}".split():
+        if not os.path.exists(tsv_file):
+            print(f"File not found: {tsv_file}")
             continue
+            
+        print(f"Reading file: {tsv_file}")
+        df = pd.read_csv(tsv_file, sep='\\t')
+        
+        # Detect if this is a PASV format file by checking columns
+        pasv_columns = ['name', 'signature', 'spans']
+        is_pasv = all(col in df.columns for col in pasv_columns)
+        
+        if is_pasv:
+            print(f"Converting PASV format file: {tsv_file}")
+            protein = os.path.basename(tsv_file).split('_')[0]
+            
+            # Convert PASV format to standard format
+            standardized = pd.DataFrame({
+                'Genome_ID': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
+                'ORF_ID': df['name'],
+                'Identified': 'PASV',
+                'Genofeature': df['signature'],
+                'Protein': protein
+            })
+            print(f"Converted {len(standardized)} PASV entries")
+            dfs.append(standardized)
+        else:
+            # Verify standard format
+            standard_columns = ['Genome_ID', 'ORF_ID', 'Identified', 'Genofeature', 'Protein']
+            if all(col in df.columns for col in standard_columns):
+                print(f"Adding standard format file: {tsv_file}")
+                dfs.append(df)
+            else:
+                print(f"Warning: File {tsv_file} has unexpected format. Columns: {df.columns.tolist()}")
+        
+        print(f"Processed {len(df)} rows from {tsv_file}")
 
-    if all_results:
-        # Combine all results and sort
-        final_df = pd.concat(all_results, ignore_index=True)
-        final_df = final_df.sort_values(['Protein', 'Genome_ID', 'ORF_ID'])
-        
-        # Print summary statistics
-        print("\\nSummary Statistics:")
-        print(f"Total entries: {len(final_df)}")
-        print("\\nEntries by Source and Protein:")
-        print(final_df.groupby(['Source', 'Protein']).size())
-        
-        # Write combined results
-        final_df.to_csv("combined_results.tsv", sep='\\t', index=False)
-        print(f"Written {len(final_df)} total entries to combined_results.tsv")
+    # Combine all DataFrames if any were read
+    if dfs:
+        print(f"Combining {len(dfs)} DataFrames")
+        combined = pd.concat(dfs, ignore_index=True)
+        print(f"Total rows: {len(combined)}")
+        print("Final column names:", combined.columns.tolist())
+        combined.to_csv("combined_results.tsv", sep='\\t', index=False)
+        print(f"Created combined file with {len(combined)} total rows")
     else:
-        # Create empty file with headers if no results
-        pd.DataFrame(columns=['Genome_ID', 'ORF_ID', 'ORF_length', 'Identified', 'signature', 'Source', 'Protein']).to_csv(
-            "combined_results.tsv", sep='\\t', index=False)
-        print("No results to process, created empty file with headers")
+        print("No data to combine")
+        pd.DataFrame(columns=['Genome_ID', 'ORF_ID', 'Identified', 'Genofeature', 'Protein']).to_csv("combined_results.tsv", sep='\\t', index=False)
     """
 }
 
 
 
 
+process phidra_only_summary {
+    debug true
+    publishDir "${params.outdir}/phidra/phidra_only/${protein}", 
+        mode: 'copy',
+        pattern: "*.tsv"
+    conda "/home/nolanv/.conda/envs/phidra"
 
+    input:
+    tuple val(protein), file(fasta)
 
+    output:
+    tuple val(protein), file("${protein}_phidra_only.tsv")
 
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    
+    protein = "${protein}"
 
+    # Process FASTA file to get ORF information
+    orfs = []
+    current_header = None
+    with open("${fasta}") as f:
+        for line in f:
+            if line.startswith('>'):
+                current_header = line.strip()[1:]
+                orfs.append(current_header)
+    
+    # Create DataFrame with same structure as annotate_top_hits output
+    results = []
+    for orf in orfs:
+        genome_id = '_'.join(orf.split('_')[:-3])
+        results.append({
+            'Genome_ID': genome_id,
+            'ORF_ID': orf,
+            'Identified': 'phidra_only',
+            'Genofeature': protein,  # Empty as specified
+            'Protein': protein
+        })
+    
+    # Create and save DataFrame
+    df = pd.DataFrame(results)
+    df.to_csv("${protein}_phidra_only.tsv", sep='\\t', index=False)
 
+    print(f"Processed {len(results)} ORFs with no hits for ${protein}")
+    """
+}
 
 
 
 process annotate_top_hits {
     debug true
+    publishDir "${params.outdir}/phidra/annotate_hits/${protein}", 
+        mode: 'copy',
+        pattern: "*_annotated_hits.tsv"
 
     input:
     tuple val(protein), 
@@ -355,7 +602,7 @@ process annotate_top_hits {
 
     script:
     """
-    #!/usr/bin/env python3
+#!/usr/bin/env python3
 import sys
 import os
 from Bio import SeqIO
@@ -424,9 +671,9 @@ def main():
     print("DEBUG - Processing files:", file1_path, file2_path)
     results, unique_file2_orfs = process_files(file1_path, file2_path, validated_ids)
     with open(output_file, "w") as f:
-        f.write("Genome_ID\\tORF_ID\\tIdentified\\tsignature\\n")
+        f.write("Genome_ID\\tORF_ID\\tIdentified\\tGenofeature\\tProtein\\n")
         for contig_id, orf_id, signature, identified in results:
-            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\n")
+            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
     print(f"Results have been saved to: {output_file}")
 
 if __name__ == "__main__":
@@ -435,31 +682,113 @@ if __name__ == "__main__":
 }
 
 
-// Input preparation workflow
+process DUPLICATE_HANDLE {
+    debug true
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}", 
+        mode: 'copy',
+        pattern: "*.tsv"
+
+    input:
+        path input_file    // Properly declare the input file
+
+    output:
+        path "duplicate_orfs.tsv"   // Declare the output file
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    
+    # Read the input file with proper quoting and correct separator
+    df = pd.read_csv("${input_file}", sep='\\t')
+    
+    # Find duplicates based on both Genome_ID and ORF_ID
+    duplicates = df[df.duplicated(subset=['Genome_ID', 'ORF_ID'], keep=False)]
+    
+    # Sort duplicates for better readability
+    duplicates = duplicates.sort_values(['Genome_ID', 'ORF_ID'])
+    
+    # Save duplicates with tab separator
+    duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
+    
+    # Print summary for debugging
+    print(f"Found {len(duplicates)} duplicate entries")
+    """
+}
+
+
+
+process COMBINE_PHIDRA_TSV {
+    debug true
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}/phidra_analysis", 
+        mode: 'copy',
+        pattern: "*.tsv"
+
+    input:
+    tuple val(tag), path(tsv_files)
+
+    output:
+    path 'combined_phidra_output.tsv'
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    import glob
+    import os
+
+    print("Debug: Current directory contents:")
+    print(os.listdir('.'))
+
+    # Get list of input files
+    tsv_files = "${tsv_files}".split()  
+    print(f"Processing TSV files: {tsv_files}")
+
+    dfs = []
+    for tsv_file in tsv_files:
+        if os.path.exists(tsv_file):
+            print(f"Reading file: {tsv_file}")
+            df = pd.read_csv(tsv_file, sep='\\t')
+            dfs.append(df)
+            print(f"Added {len(df)} rows from {tsv_file}")
+        else:
+            print(f"Warning: File not found: {tsv_file}")
+
+    if dfs:
+        # Combine all DataFrames into one
+        combined = pd.concat(dfs, ignore_index=True)
+        combined.to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
+        print(f"Debug: Written combined file with {len(combined)} total rows")
+    else:
+        print("Warning: No data to combine")
+        pd.DataFrame().to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
+    """
+}
+
 workflow {
     def ch_input = Channel.fromList(params.proteins)
 
-
-    // 2. Run PHIDRA
     PHIDRA(ch_input)
         .view { "[DEBUG] PHIDRA output: $it" }
         .branch { protein, fasta, init_search, rec_search ->
             def name = protein.toLowerCase()
             annotation: name in ['polb', 'helicase']
             pasv: name in ['pola', 'rnr']
+            phidra_only: true
         }
         .set { branched }
 
-    // 3. Annotation path
     def ch_annotation = branched.annotation
         .filter { it != null }
         .map { protein, fasta, init_search, rec_search ->
             tuple(protein, fasta, init_search, rec_search)
         }
         | annotate_top_hits
+        | map { protein, file -> file }
 
-    // 4. PASV path
-    def ch_pasv = branched.pasv
+    def ch_pasv_results = branched.pasv
         .filter { it != null }
         .map { protein, fasta, init_search, rec_search ->
             def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
@@ -467,18 +796,59 @@ workflow {
             tuple(protein, fasta, align_refs)
         }
         | PASV
+        | PASV_POST
 
-    // Standardize results
-    ch_annotation
-        .mix(ch_pasv)
-        .collect()
-        .map { results ->
-            def file_map = [:] // Create a map of protein -> file
-            results.collate(2).each { protein, file ->
-                file_map[protein] = file
-            }
-            tuple(file_map.keySet().toList(), file_map.values().toList())
+    def ch_phidra_only = branched.phidra_only
+        .filter { it != null }
+        .map { protein, fasta, init_search, rec_search ->
+            tuple(protein, fasta)
         }
-        .view { "[DEBUG] Files for STANDARDIZE_OUTPUTS: proteins=${it[0]}, files=${it[1]}" }
+        | phidra_only_summary
+        | map { protein, file -> file }
+
+    def ch_pasv_processed = ch_pasv_results
+        .map { protein, processed_file, stats, plot ->
+            // Return only the processed file for combining with annotation results
+            processed_file
+        }
+
+    def ch_combined_phidra_results = Channel.empty()
+        .mix(ch_annotation, ch_phidra_only)
+        .collect()
+        .map { files -> tuple('combined', files) }  
+        .view { "[DEBUG] Processing files: ${it[1]}" }
+        | COMBINE_PHIDRA_TSV
+
+    // Use the same channel output for both processes
+    ch_combined_phidra_results | ANALYZE_AND_PLOT
+
+    // Mix with PASV results and standardize
+    def ch_standardized_output = Channel.empty()
+        .mix(
+            ch_combined_phidra_results,
+            ch_pasv_processed
+        )
+        .collect()
+        .map { files -> 
+            def flattened = files.flatten()
+            println "[DEBUG] Files to standardize: ${flattened}"
+            tuple('combined', flattened) 
+        }
         | STANDARDIZE_OUTPUTS
+
+    def ch_duplicated_output = ch_standardized_output
+        | DUPLICATE_HANDLE
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
