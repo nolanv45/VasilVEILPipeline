@@ -139,61 +139,6 @@ process PASV {
     """
 }
 
-// process GENERATE_STATS {
-//     debug true
-//     conda "/home/nolanv/.conda/envs/phidra"
-//     publishDir "${params.outdir}/stats", mode: 'copy'
-
-//     input:
-//     path(input_tsv)
-
-//     output:
-//     path "protein_stats.tsv"
-
-//     script:
-//     """
-//     #!/usr/bin/env python3
-//     import pandas as pd
-//     import numpy as np
-
-//     # Read the input TSV
-//     df = pd.read_csv("${input_tsv}", sep='\\t')
-//     print(f"Processing statistics for {len(df)} entries")
-//     print(f"Columns in dataframe: {df.columns.tolist()}")
-
-//     # Calculate ORF length using the provided formula
-//     df['ORF_length'] = df['ORF_ID'].apply(
-//         lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
-//     )
-
-//     # Initialize stats list
-//     stats_data = []
-//     for genofeature in df['Genofeature'].unique():
-//         genofeature_df = df[df['Genofeature'] == genofeature]
-        
-//         for identified in genofeature_df['Identified'].unique():
-//             group = genofeature_df[genofeature_df['Identified'] == identified]
-//             lengths = group['ORF_length']
-            
-//             quartiles = lengths.quantile([0.25, 0.5, 0.75])
-//             stats_data.append({
-//                 'Genofeature': genofeature,
-//                 'Identified': identified,
-//                 'count': len(group),
-//                 'mean_length': lengths.mean(),
-//                 'min_length': lengths.min(),
-//                 'q1_length': quartiles[0.25],
-//                 'median_length': quartiles[0.5],
-//                 'q3_length': quartiles[0.75],
-//                 'max_length': lengths.max()
-//             })
-
-//     # Convert to DataFrame and save
-//     stats_df = pd.DataFrame(stats_data)
-//     stats_df = stats_df.sort_values(['Genofeature', 'Identified'])
-//     stats_df.to_csv("protein_stats.tsv", sep='\\t', index=False)
-//     """
-// }
 
 process ANALYZE_AND_PLOT {
     debug true
@@ -226,18 +171,18 @@ process ANALYZE_AND_PLOT {
 
     # Calculate ORF length if not present
     if 'ORF_length' not in df.columns:
-        df['ORF_length'] = df['ORF_ID'].apply(
+        df['ORF_length'] = df['orf_id'].apply(
             lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
         )
 
     # Generate basic statistics
-    stats = df.groupby('Genofeature').agg({
+    stats = df.groupby('genofeature').agg({
         'ORF_length': ['count', 'mean', 'min', 'max']
     }).reset_index()
     
     # Flatten column names
-    stats.columns = ['Genofeature', 'count', 'mean_length', 'min_length', 'max_length']
-    stats = stats.sort_values('Genofeature')
+    stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_length']
+    stats = stats.sort_values('genofeature')
     
     # Save statistics
     stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
@@ -246,7 +191,7 @@ process ANALYZE_AND_PLOT {
     plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
     
     # Create boxplot using seaborn
-    sns.boxplot(data=df, x='ORF_length', y='Genofeature', 
+    sns.boxplot(data=df, x='ORF_length', y='genofeature', 
                orient='h', color='skyblue')
     
     # Add annotations
@@ -267,7 +212,7 @@ process ANALYZE_AND_PLOT {
             ha='left', va='center',
             fontsize=9, color='green')
     
-    plt.title("Length Distribution by Genofeature")
+    plt.title("Length Distribution by genofeature")
     plt.xlabel("ORF Length (aa)")
     plt.grid(True, axis='x', linestyle='--', alpha=0.7)
     
@@ -498,17 +443,17 @@ process STANDARDIZE_OUTPUTS {
             
             # Convert PASV format to standard format
             standardized = pd.DataFrame({
-                'Genome_ID': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
-                'ORF_ID': df['name'],
-                'Identified': 'PASV',
-                'Genofeature': df['signature'],
-                'Protein': protein
+                'genome_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
+                'orf_id': df['name'],
+                'identified': 'PASV',
+                'genofeature': df['signature'],
+                'protein': protein
             })
             print(f"Converted {len(standardized)} PASV entries")
             dfs.append(standardized)
         else:
             # Verify standard format
-            standard_columns = ['Genome_ID', 'ORF_ID', 'Identified', 'Genofeature', 'Protein']
+            standard_columns = ['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']
             if all(col in df.columns for col in standard_columns):
                 print(f"Adding standard format file: {tsv_file}")
                 dfs.append(df)
@@ -527,7 +472,7 @@ process STANDARDIZE_OUTPUTS {
         print(f"Created combined file with {len(combined)} total rows")
     else:
         print("No data to combine")
-        pd.DataFrame(columns=['Genome_ID', 'ORF_ID', 'Identified', 'Genofeature', 'Protein']).to_csv("combined_results.tsv", sep='\\t', index=False)
+        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_results.tsv", sep='\\t', index=False)
     """
 }
 
@@ -568,11 +513,11 @@ process phidra_only_summary {
     for orf in orfs:
         genome_id = '_'.join(orf.split('_')[:-3])
         results.append({
-            'Genome_ID': genome_id,
-            'ORF_ID': orf,
-            'Identified': 'phidra_only',
-            'Genofeature': protein,  # Empty as specified
-            'Protein': protein
+            'genome_id': genome_id,
+            'orf_id': orf,
+            'identified': 'phidra_only',
+            'genofeature': protein,  # Empty as specified
+            'protein': protein
         })
     
     # Create and save DataFrame
@@ -671,7 +616,7 @@ def main():
     print("DEBUG - Processing files:", file1_path, file2_path)
     results, unique_file2_orfs = process_files(file1_path, file2_path, validated_ids)
     with open(output_file, "w") as f:
-        f.write("Genome_ID\\tORF_ID\\tIdentified\\tGenofeature\\tProtein\\n")
+        f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
         for contig_id, orf_id, signature, identified in results:
             f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
     print(f"Results have been saved to: {output_file}")
@@ -703,11 +648,11 @@ process DUPLICATE_HANDLE {
     # Read the input file with proper quoting and correct separator
     df = pd.read_csv("${input_file}", sep='\\t')
     
-    # Find duplicates based on both Genome_ID and ORF_ID
-    duplicates = df[df.duplicated(subset=['Genome_ID', 'ORF_ID'], keep=False)]
+    # Find duplicates based on both genome_id and orf_id
+    duplicates = df[df.duplicated(subset=['genome_id', 'orf_id'], keep=False)]
     
     # Sort duplicates for better readability
-    duplicates = duplicates.sort_values(['Genome_ID', 'ORF_ID'])
+    duplicates = duplicates.sort_values(['genome_id', 'orf_id'])
     
     # Save duplicates with tab separator
     duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
