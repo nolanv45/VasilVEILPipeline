@@ -86,12 +86,12 @@ process PASV {
 
     # Map protein names to PASV expected names and settings
     if [ "\${protein_lower}" == "pola" ]; then
-        mapped_name="POL_putative"
+        mapped_name="${protein}_putative"
         roi_start=521
         roi_end=923
         cat_sites="668,705,758,762"
     elif [ "\${protein_lower}" == "rnr" ]; then
-        mapped_name="RNR_putative"
+        mapped_name="${protein}_putative"
         roi_start=437
         roi_end=625
         cat_sites="437,439,441,462,438"
@@ -129,13 +129,13 @@ process PASV {
         \${cat_sites}
 
     # Rename output file if it exists
-    PASV_FILE="pasv_output/output/\${mapped_name}.pasv_signatures.tsv"
-    if [ -f "\${PASV_FILE}" ]; then
-        mv "\${PASV_FILE}" "pasv_output/output/${protein}_putative.pasv_signatures.tsv"
-    else
-        echo "Error: PASV did not produce expected output file: \${PASV_FILE}"
-        exit 1
-    fi
+    # PASV_FILE="pasv_output/output/\${mapped_name}.pasv_signatures.tsv"
+    #if [ -f "\${PASV_FILE}" ]; then
+     #   mv "\${PASV_FILE}" "pasv_output/output/${protein}_putative.pasv_signatures.tsv"
+    #else
+     #   echo "Error: PASV did not produce expected output file: \${PASV_FILE}"
+      #  exit 1
+    #fi
     """
 }
 
@@ -784,16 +784,3 @@ workflow {
     def ch_duplicated_output = ch_standardized_output
         | DUPLICATE_HANDLE
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
