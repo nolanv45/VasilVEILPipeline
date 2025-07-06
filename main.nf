@@ -1,5 +1,30 @@
 nextflow.enable.dsl=2
 
+process CLEAN_FASTA_HEADERS {
+    
+    conda "/home/nolanv/.conda/envs/phidra"
+
+    input:
+        path(fasta)
+
+    output:
+        path("*cleaned_input.fasta"), emit: fasta
+
+    script:
+    """
+    # First replace dots with hyphens in headers
+    seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
+
+    # Then remove stop codons (*) from sequences
+    seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "cleaned_input.fasta"
+    rm temp.fasta
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        seqkit: \$(seqkit version | sed 's/^seqkit v//')
+    END_VERSIONS
+    """
+}
 
 process PHIDRA {
     conda "/home/nolanv/.conda/envs/phidra"
@@ -21,35 +46,13 @@ process PHIDRA {
     script:
     """
     WORK_DIR=\$PWD
-    # Clean input fasta headers - only replace dots in headers
-    echo "[INFO] Cleaning input FASTA headers..."    
-    # sed '/^>/ s/\\./-/g' ${params.input_fasta} > cleaned_input_tmp.fasta
-
-    # Remove asterisks from sequences
-    echo "[INFO] Removing asterisks from sequences..."
-    # sed -i 's/\\*//g' cleaned_input_tmp.fasta
-
-    # Filter sequences to minimum length 200 using seqkit
-    # seqkit seq -m 200 cleaned_input_tmp.fasta -o cleaned_input.fasta
-
-    # Clean subjectDB fasta headers - only replace dots in headers
-    # sed '/^>/ s/\\./-/g' ${protein_config.subjectDB} > cleaned_subjectDB_tmp.fasta
-
-    # Remove asterisks from subjectDB sequences
-    # sed -i 's/\\*//g' cleaned_subjectDB_tmp.fasta
-
-    # Filter subjectDB sequences to minimum length 200 (optional)
-    # seqkit seq -m 200 cleaned_subjectDB_tmp.fasta -o cleaned_subjectDB.fasta
-
-
     source /etc/profile.d/conda.sh
     conda activate /home/nolanv/.conda/envs/phidra
-
 
     cd ${params.phidra_dir}
 
     python phidra_run.py \
-        -i ${params.input_fasta} \
+        -i ${protein_config.input_fasta} \
         -db ${protein_config.subjectDB} \
         -pfam ${params.pfamDB} \
         -ida ${protein_config.pfamDomain} \
@@ -712,11 +715,75 @@ process COMBINE_PHIDRA_TSV {
     """
 }
 
-workflow {
-    def ch_input = Channel.fromList(params.proteins)
 
-    PHIDRA(ch_input)
-        .view { "[DEBUG] PHIDRA output: $it" }
+process SPLIT_BY_GENOFEATURE {
+    publishDir "${params.outdir}",
+        mode: 'copy'
+
+    input:
+        path filtered_tsv 
+        path input_fasta
+
+    output:
+        path "files_for_embeddings", emit: fastas_for_embeddings
+
+    script:
+    """
+    #!/usr/bin/env python3
+    from Bio import SeqIO
+    import pandas as pd
+    import os
+
+    # Create the base output directory
+    os.makedirs("files_for_embeddings", exist_ok=True)
+    df = pd.read_csv("${filtered_tsv}", sep='\\t')
+    seq_dict = SeqIO.to_dict(SeqIO.parse("${input_fasta}", "fasta"))
+
+    # Group by protein and genofeature
+    for protein in df['protein'].unique():
+        protein_df = df[df['protein'] == protein]
+        
+        for genofeature in protein_df['genofeature'].unique():
+            # Create nested directory structure
+            dir_path = os.path.join("files_for_embeddings", protein, genofeature)
+            os.makedirs(dir_path, exist_ok=True)
+            
+            # Filter records for this genofeature
+            genofeature_df = protein_df[protein_df['genofeature'] == genofeature]
+            
+            # Save filtered TSV
+            genofeature_df.to_csv(f"{dir_path}/filtered.tsv", sep='\\t', index=False)
+            
+            # Extract matching sequences
+            matching_seqs = []
+            for orf_id in genofeature_df['orf_id']:
+                if orf_id in seq_dict:
+                    matching_seqs.append(seq_dict[orf_id])
+            
+            # Write matching sequences to FASTA
+            if matching_seqs:
+                SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
+            
+            print(f"Processed {protein}/{genofeature}: {len(matching_seqs)} sequences")
+    """
+}
+
+
+workflow {
+    ch_input_fasta = Channel.fromPath(params.input_fasta)
+    // def ch_input = Channel.fromList(params.proteins)
+
+    CLEAN_FASTA_HEADERS(ch_input_fasta)
+
+
+    ch_proteins = Channel.fromList(params.proteins)
+        .combine(CLEAN_FASTA_HEADERS.out.fasta)
+        .map { config, cleaned_fasta -> 
+            // Add the cleaned fasta path to the config
+            config + [input_fasta: cleaned_fasta]
+        }
+
+    PHIDRA(ch_proteins)
         .branch { protein, fasta, init_search, rec_search ->
             def name = protein.toLowerCase()
             annotation: name in ['polb', 'helicase']
@@ -783,4 +850,9 @@ workflow {
 
     def ch_duplicated_output = ch_standardized_output
         | DUPLICATE_HANDLE
+
+    def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+        ch_standardized_output,
+        CLEAN_FASTA_HEADERS.out.fasta
+    )
 }

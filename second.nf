@@ -1,62 +1,5 @@
 nextflow.enable.dsl=2
 
-process SPLIT_BY_GENOFEATURE {
-    publishDir "${params.outdir}",
-        mode: 'copy'
-
-    input:
-        path filtered_tsv 
-        path input_fasta
-
-    output:
-        path "files_for_embeddings", emit: fastas_for_embeddings
-
-    script:
-    def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
-    """
-    #!/usr/bin/env python3
-    from Bio import SeqIO
-    import pandas as pd
-    import os
-
-    # Create the base output directory
-    os.makedirs("files_for_embeddings", exist_ok=True)
-    df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${input_fasta}", "fasta"))
-    
-
-    selected = [gf.lower() for gf in [${selected_list}]]
-
-    # Group by protein and genofeature
-    for protein in df['protein'].unique():
-        protein_df = df[df['protein'] == protein]
-        
-        for genofeature in protein_df['genofeature'].unique():
-            if genofeature.lower() in selected:
-                # Create nested directory structure
-                dir_path = os.path.join("files_for_embeddings", protein, genofeature)
-                os.makedirs(dir_path, exist_ok=True)
-                
-                # Filter records for this genofeature
-                genofeature_df = protein_df[protein_df['genofeature'] == genofeature]
-                
-                # Save filtered TSV
-                genofeature_df.to_csv(f"{dir_path}/filtered.tsv", sep='\\t', index=False)
-                
-                # Extract matching sequences
-                matching_seqs = []
-                for orf_id in genofeature_df['orf_id']:
-                    if orf_id in seq_dict:
-                        matching_seqs.append(seq_dict[orf_id])
-                
-                # Write matching sequences to FASTA
-                if matching_seqs:
-                    SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
-                
-                print(f"Processed {protein}/{genofeature}: {len(matching_seqs)} sequences")
-    """
-}
-
 process EMBEDDINGS {
     publishDir "${params.outdir}",
         mode: 'copy'
@@ -73,6 +16,7 @@ process EMBEDDINGS {
         path "*", emit: embeddings_dirs
         
     script:
+    def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -88,30 +32,34 @@ process EMBEDDINGS {
         if [ -d "\$protein_dir" ]; then
             protein=\$(basename "\$protein_dir")
             echo "Processing protein directory: \$protein"
-            mkdir -p "embeddings/\$protein"
             
-            # Process genofeature directories
+            # Process genofeature directories, but only if they're in selected_list
             for genofeature_dir in "\$protein_dir"/*; do
                 if [ -d "\$genofeature_dir" ]; then
                     genofeature=\$(basename "\$genofeature_dir")
-                    echo "Processing genofeature directory: \$genofeature"
-                    mkdir -p "embeddings/\$protein/\$genofeature"
-                    
-                    # Process FASTA files
-                    for fasta in "\$genofeature_dir"/*.fasta; do
-                        if [ -f "\$fasta" ]; then
-                            echo "Processing FASTA: \$fasta"
-                            output_dir="embeddings/\$protein/\$genofeature"
-                            
-                            /home/nolanv/.conda/envs/esm-umap/bin/python \\
-                                "\$extract_script" \\
-                                "\$model_path" \\
-                                "\$fasta" \\
-                                "\$output_dir" \\
-                                --repr_layers 36 \\
-                                --include mean || exit 1
-                        fi
-                    done
+                    # Check if genofeature is in selected_list (case-insensitive)
+                    if echo "${selected_list}" | tr '[:upper:]' '[:lower:]' | grep -iq "\'\$(echo \$genofeature | tr '[:upper:]' '[:lower:]')\'"; then
+                        echo "Processing genofeature directory: \$genofeature"
+                        mkdir -p "embeddings/\$protein/\$genofeature"
+                        
+                        # Process FASTA files
+                        for fasta in "\$genofeature_dir"/*.fasta; do
+                            if [ -f "\$fasta" ]; then
+                                echo "Processing FASTA: \$fasta"
+                                output_dir="embeddings/\$protein/\$genofeature"
+                                
+                                /home/nolanv/.conda/envs/esm-umap/bin/python \\
+                                    "\$extract_script" \\
+                                    "\$model_path" \\
+                                    "\$fasta" \\
+                                    "\$output_dir" \\
+                                    --repr_layers 36 \\
+                                    --include mean || exit 1
+                            fi
+                        done
+                    else
+                        echo "Skipping genofeature \$genofeature (not in selected list)"
+                    fi
                 fi
             done
         fi
@@ -474,7 +422,7 @@ tile_images("plots", "plots/tiled_image.png")
 }
 
 process GENERATE_COORDINATES {
-    publishDir "${params.outdir}/coordinates",
+    publishDir "${params.outdir}",
         mode: 'copy'
         
     label 'gpu'  
@@ -501,8 +449,8 @@ process GENERATE_COORDINATES {
     from pathlib import Path
 
     # Create output directories
-    os.makedirs("coords", exist_ok=True)
-    os.makedirs("ids", exist_ok=True)
+    os.makedirs("coordinates/coords", exist_ok=True)
+    os.makedirs("coordinates/ids", exist_ok=True)
 
     # SET SEED for reproducibility
     os.environ['PYTHONHASHSEED'] = '42'
@@ -573,8 +521,8 @@ process GENERATE_COORDINATES {
                 
                 # Save outputs with parameter-specific names
                 md_int = int(md * 10)
-                coord_file = f"coords/coordinates_nn{nn}_md{md_int}.npy"
-                id_file = f"ids/embedding_ids_nn{nn}_md{md_int}.txt"
+                coord_file = f"coordinates/coords/coordinates_nn{nn}_md{md_int}.npy"
+                id_file = f"coordinates/ids/embedding_ids_nn{nn}_md{md_int}.txt"
                 
                 np.save(coord_file, coordinates)
                 with open(id_file, 'w') as f:
@@ -918,22 +866,20 @@ workflow {
     ch_filtered_tsv = Channel.fromPath(params.second_run)
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
     
-    // Generate coordinates
-    ch_split_dir = SPLIT_BY_GENOFEATURE(
-        ch_filtered_tsv,
-        params.input_fasta
-    )
+    ch_split_dir = Channel.fromPath(params.split_dir)
 
-    ch_embeddings = EMBEDDINGS(
-        ch_split_dir
-    )
+    // ch_embeddings = EMBEDDINGS(
+    //     ch_split_dir
+    // )
 
     ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/embeddings",
         ch_filtered_tsv
     )
 
-    // Use duplicated channels in parallel processes
+
+
+    // remember to fix the input from coordinates the same way you did to pasv output.
     UMAP_PROJECTION(
         ch_coordinates,
         ch_filtered_tsv,
