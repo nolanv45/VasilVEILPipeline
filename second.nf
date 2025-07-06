@@ -215,7 +215,7 @@ process UMAP_PROJECTION {
         path metadata_file   // Metadata file with colors/markers
         
     output:
-        path "plots/*.{png,svg}", emit: plots     // Plot outputs
+        path "plots/tiled_image.png", emit: plots     // Plot outputs
         
     script:
     def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
@@ -231,6 +231,7 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from collections import defaultdict
 import platform
+from PIL import Image, ImageDraw, ImageFont
 
 # Create output directory
 os.makedirs("plots", exist_ok=True)
@@ -318,38 +319,19 @@ def plot_umap(module_df, nn, md, output_file, display_names):
                                      label=display_name)
                 legend_handles.append(handle)
 
-        # Add legend to main plot
-        if legend_handles:
-            legend = ax.legend(handles=legend_handles,
-                             title="Genofeature",
-                             bbox_to_anchor=(1.05, 1),
-                             loc='upper left',
-                             frameon=False)
-        #save main plot with legend
-        plt.tight_layout()
+        # Save plot without legend
         plt.savefig(output_file, dpi=600, bbox_inches="tight")
-        print(f"Saved plot with legend: {output_file}")
+        plt.close()
         
-        # Create separate legend figure
-        legend_fig = plt.figure(figsize=(4, len(legend_handles) * 0.3))
-        legend_ax = legend_fig.add_subplot(111)
-        legend_ax.axis('off')
+        return legend_handles
         
-        # Add legend to separate figure
-        legend_ax.legend(handles=legend_handles,
-                        title="Genofeature",
-                        loc="center left",
-                        frameon=False)
-        
-        # Close figures
-        plt.close(fig)
-        plt.close(legend_fig)
-        return True
         
     except Exception as e:
         print(f"Error processing plot: {e}")
         print("Available columns in metadata_df:", metadata_df.columns.tolist())
         return False
+
+
 
 # Main execution
 print("Loading metadata...")
@@ -358,66 +340,167 @@ metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
 display_names = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 
 # Generate plots for specified parameters
+legend_handles = None
 for nn in [75, 100, 125]:
     for md in [0, 0.3, 0.5, 0.7]:
         output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
-        if plot_umap(module_df, nn, md, output_file, display_names):
-            print(f"Successfully generated plot for nn={nn}, md={md}")
-        else:
-            print(f"Failed to generate plot for nn={nn}, md={md}")
+        handles = plot_umap(module_df, nn, md, output_file, display_names)
+        if legend_handles is None:
+            legend_handles = handles
+
 from PIL import Image
 import math
 
-def tile_images(image_dir, output_file, padding=10, bg_color=(255,255,255,255)):
-    # Find all PNG files in the output directory
+def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(255,255,255,255)):
+    # Find and sort PNG files
     png_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.lower().endswith(".png")]
-    png_files.sort()
-    if not png_files:
-        print("No PNG files found to tile.")
-        return
+    
+    # Extract parameter values using proper filename parsing
+    nn_values = set()
+    md_values = set()
+    for filename in png_files:
+        base = os.path.basename(filename)  # Get just the filename
+        if base.startswith("umap_nn"):
+            parts = base.replace(".png", "").split("_")  # Split on underscore after removing .png
+            try:
+                nn_part = parts[1]  # gets "nn125"
+                nn = int(nn_part.replace("nn", ""))  # properly removes "nn" prefix
+                md_part = parts[2]  # gets "md5"
+                md = float(md_part.replace("md", "")) / 10
+                nn_values.add(nn)
+                md_values.add(md)
+            except (IndexError, ValueError) as e:
+                print(f"Skipping malformed filename: {filename}")
+                continue
 
-    # Open all images and get their sizes
+    # Sort the values
+    nn_values = sorted(list(nn_values))
+    md_values = sorted(list(md_values))
+
+    def get_params(filename):
+        base = os.path.basename(filename)
+        parts = base.replace(".png", "").split("_")
+        try:
+            # Extract everything after "nn" until "_"
+            nn_part = parts[1]  # gets "nn125"
+            nn = int(nn_part.replace("nn", ""))  # properly removes "nn" prefix
+            
+            # Extract everything after "md" until ".png"
+            md_part = parts[2]  # gets "md5"
+            md = float(md_part.replace("md", "")) / 10
+            
+            return (nn_values.index(nn), md_values.index(md))
+        except (IndexError, ValueError) as e:
+            print(f"Error parsing filename {filename}: {e}")
+            return (0, 0)
+    
+    png_files.sort(key=get_params)
+
+    # Open all images and get sizes
     images = [Image.open(f) for f in png_files]
     sizes = [img.size for img in images]
 
-    n = len(images)
-    cols = math.ceil(math.sqrt(n))
-    rows = math.ceil(n / cols)
+    cols = len(md_values)  # Number of columns based on md values
+    rows = len(nn_values)  # Number of rows based on nn values
 
-    # Compute max width for each column and max height for each row
+    # Calculate column widths and row heights
     col_widths = [0] * cols
     row_heights = [0] * rows
     for idx, (w, h) in enumerate(sizes):
         row = idx // cols
         col = idx % cols
-        if w > col_widths[col]:
-            col_widths[col] = w
-        if h > row_heights[row]:
-            row_heights[row] = h
+        col_widths[col] = max(col_widths[col], w)
+        row_heights[row] = max(row_heights[row], h)
 
-    # Compute x offsets for columns and y offsets for rows
-    x_offsets = [0]
-    for w in col_widths[:-1]:
-        x_offsets.append(x_offsets[-1] + w + padding)
-    y_offsets = [0]
-    for h in row_heights[:-1]:
-        y_offsets.append(y_offsets[-1] + h + padding)
 
-    canvas_width = sum(col_widths) + padding * (cols - 1)
-    canvas_height = sum(row_heights) + padding * (rows - 1)
-    canvas = Image.new('RGBA', (canvas_width, canvas_height), bg_color)
+    label_height = 200  # Height for labels
+    label_width = 600  # Width for labels
+    grid_width = sum(col_widths) + padding * (cols - 1)
+    grid_height = sum(row_heights) + padding * (rows - 1)
 
+    # Create canvas with space for labels
+    total_width = grid_width + label_width + padding + int(grid_height * 0.25)  # 0.25 for legend width
+    total_height = grid_height + label_height * 2  # Space for top and bottom labels
+    canvas = Image.new('RGBA', (total_width, total_height), bg_color)
+
+    # Create a drawing object
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 120)
+
+    # Add column labels (md values)
+    md_labels = [f"md={md:.1f}" for md in md_values]
+    for col, label in enumerate(md_labels):
+        x = label_width + sum(col_widths[:col]) + padding * col + col_widths[col]//2
+        y = label_height//2
+        draw.text((x, y), label, fill='black', font=font, anchor='mm')
+
+
+    # Add row labels (nn values)
+    nn_labels = [f"nn={nn}" for nn in nn_values]
+    for row, label in enumerate(nn_labels):
+        x = 50
+        y = label_height + sum(row_heights[:row]) + padding * row + row_heights[row]//2
+        draw.text((x, y), label, fill='black', font=font, anchor='lm')
+
+    # Paste plots into grid with offset for labels
+    x_offset = label_width
+    y_offset = label_height
     for idx, img in enumerate(images):
         row = idx // cols
         col = idx % cols
-        x = x_offsets[col]
-        y = y_offsets[row]
+        x = x_offset + sum(col_widths[:col]) + padding * col
+        y = y_offset + sum(row_heights[:row]) + padding * row
         canvas.paste(img, (x, y))
 
+    # Create and paste legend
+    figure_width = 16
+    figure_height = 36
+    
+    legend_fig = plt.figure(figsize=(figure_width, figure_height))
+    legend_ax = legend_fig.add_subplot(111)
+    legend_ax.axis('off')
+
+    if legend_handles:
+        legend = legend_ax.legend(handles=legend_handles,
+                                title="Genofeature",
+                                loc="center left",
+                                bbox_to_anchor=(0, 0.5),
+                                frameon=False,
+                                fontsize=30,              # Adjusted font size
+                                title_fontsize=36,        # Adjusted title size
+                                borderaxespad=2,
+                                labelspacing=2.0,         # Adjusted spacing
+                                handlelength=4,
+                                handleheight=4,
+                                markerscale=4)
+
+    # Save initial legend
+    legend_path = "temp_legend.png"
+    legend_fig.savefig(legend_path, 
+                      bbox_inches='tight', 
+                      dpi=150,              # Reduced DPI to prevent size issues
+                      facecolor='white',
+                      edgecolor='none',
+                      pad_inches=0.5)
+    plt.close(legend_fig)
+
+    # Load and scale legend
+    legend_img = Image.open(legend_path)
+    legend_height = grid_height
+    legend_width = int(grid_height * 0.25)  # 25% of grid height
+    legend_img = legend_img.resize((legend_width, legend_height), Image.Resampling.LANCZOS)
+
+    # Paste legend
+    legend_x = x_offset + grid_width + padding
+    legend_y = y_offset
+    canvas.paste(legend_img, (legend_x, legend_y))
+
+    # Cleanup and save
+    os.remove(legend_path)
     canvas.save(output_file)
-    print(f"Tiled image saved as {output_file}")
+    print(f"Tiled image with legend saved as {output_file}")
     #--------END Tiled Image Block----------------
-tile_images("plots", "plots/tiled_image.png")
+tile_images("plots", "plots/tiled_image.png", legend_handles)
     """
 }
 
@@ -872,23 +955,23 @@ workflow {
     //     ch_split_dir
     // )
 
-    ch_coordinates = GENERATE_COORDINATES(
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/embeddings",
-        ch_filtered_tsv
-    )
+    // ch_coordinates = GENERATE_COORDINATES(
+    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/embeddings",
+    //     ch_filtered_tsv
+    // )
 
 
 
     // remember to fix the input from coordinates the same way you did to pasv output.
     UMAP_PROJECTION(
-        ch_coordinates,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/coordinates",
         ch_filtered_tsv,
         ch_metadata
     )
 
-    HDBSCAN(
-        ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata
-    )
+    // HDBSCAN(
+    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/coordinates",
+    //     ch_filtered_tsv,
+    //     ch_metadata
+    // )
 }
