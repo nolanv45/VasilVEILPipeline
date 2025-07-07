@@ -1,7 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 import sys
-
 
 def pasv_post(file):
     df = pd.read_csv(file, sep='\t')
