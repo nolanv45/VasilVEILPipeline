@@ -27,11 +27,17 @@ process EMBEDDINGS {
     model_path="/mnt/VEIL/tools/embeddings/models/esm2_t36_3B_UR50D.pt"
     ls -R "${split_dir}"
 
+    # Get version info
+    python_version=\$(python -V | sed 's/Python //')
+    pytorch_version=\$(python -c "import torch; print(torch.__version__)")
+    model_version=\$(python -c "import torch; m=torch.load('\${model_path}', map_location='cpu'); print(m['model_data']['model_version'] if 'model_data' in m and 'model_version' in m['model_data'] else 'unknown')")
+
     # Process each protein directory
     for protein_dir in "${split_dir}"/*; do
         if [ -d "\$protein_dir" ]; then
             protein=\$(basename "\$protein_dir")
             echo "Processing protein directory: \$protein"
+            mkdir -p "embeddings/\$protein"
             
             # Process genofeature directories, but only if they're in selected_list
             for genofeature_dir in "\$protein_dir"/*; do
@@ -40,14 +46,26 @@ process EMBEDDINGS {
                     # Check if genofeature is in selected_list (case-insensitive)
                     if echo "${selected_list}" | tr '[:upper:]' '[:lower:]' | grep -iq "\'\$(echo \$genofeature | tr '[:upper:]' '[:lower:]')\'"; then
                         echo "Processing genofeature directory: \$genofeature"
-                        mkdir -p "embeddings/\$protein/\$genofeature"
-                        
+                        output_dir="embeddings/\$protein/\$genofeature"                 
+                        mkdir -p "\$output_dir"
+               
                         # Process FASTA files
                         for fasta in "\$genofeature_dir"/*.fasta; do
                             if [ -f "\$fasta" ]; then
                                 echo "Processing FASTA: \$fasta"
-                                output_dir="embeddings/\$protein/\$genofeature"
-                                
+
+
+                                # Extract base name of the FASTA file
+                                fasta_base=\$(basename "\$fasta" .fasta)
+
+                                # Check if embeddings already exist
+                                if [ -d "${params.outdir}/embeddings/\$protein/\$genofeature/batch_0" ] && [ -n "\$(find "${params.outdir}/embeddings/\$protein/\$genofeature/batch_0" -name '*.pt' 2>/dev/null)" ]; then
+                                    echo "Embeddings already exist in output directory for \$fasta_base, skipping..."
+                                    # Copy existing embeddings to work directory to ensure output is complete
+                                    cp -r "${params.outdir}/embeddings/\$protein/\$genofeature" "embeddings/\$protein/"
+                                    continue
+                                fi
+                                echo "Generating embeddings for \$fasta_base..."
                                 /home/nolanv/.conda/envs/esm-umap/bin/python \\
                                     "\$extract_script" \\
                                     "\$model_path" \\
@@ -382,11 +400,11 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
         parts = base.replace(".png", "").split("_")
         try:
             # Extract everything after "nn" until "_"
-            nn_part = parts[1]  # gets "nn125"
+            nn_part = parts[1] 
             nn = int(nn_part.replace("nn", ""))  # properly removes "nn" prefix
             
             # Extract everything after "md" until ".png"
-            md_part = parts[2]  # gets "md5"
+            md_part = parts[2]  
             md = float(md_part.replace("md", "")) / 10
             
             return (nn_values.index(nn), md_values.index(md))
@@ -413,34 +431,79 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
         row_heights[row] = max(row_heights[row], h)
 
 
-    label_height = 200  # Height for labels
-    label_width = 600  # Width for labels
+    label_height = 500  # Height for labels
+    label_width = 500  # Width for labels
+
+    axis_title_height = 200 
+
     grid_width = sum(col_widths) + padding * (cols - 1)
     grid_height = sum(row_heights) + padding * (rows - 1)
 
     # Create canvas with space for labels
-    total_width = grid_width + label_width + padding + int(grid_height * 0.25)  # 0.25 for legend width
-    total_height = grid_height + label_height * 2  # Space for top and bottom labels
+    total_width = grid_width + label_width + padding * 2 + int(grid_height * 0.3)
+    total_height = grid_height + label_height * 2 + axis_title_height * 2  # Space for top and bottom labels
     canvas = Image.new('RGBA', (total_width, total_height), bg_color)
 
     # Create a drawing object
     draw = ImageDraw.Draw(canvas)
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 120)
 
+
+    # Add X-axis title
+    x_title = "Minimum Distance (md)"
+    x_title_img = Image.new('RGBA', (grid_width, axis_title_height), bg_color)
+    x_draw = ImageDraw.Draw(x_title_img)
+    x_draw.text((grid_width//2, axis_title_height//2), x_title, fill='black', font=font, anchor='mm')
+    
+    # Paste X-axis title at the top
+    x_title_x = label_width
+    x_title_y = axis_title_height//2  # Moved higher up
+    canvas.paste(x_title_img, (x_title_x, x_title_y))
+
+    # Create and rotate Y-axis title
+    y_title = "Number of Neighbors (nn)"
+    y_title_img = Image.new('RGBA', (grid_height, axis_title_height), bg_color)
+    y_draw = ImageDraw.Draw(y_title_img)
+    y_draw.text((grid_height//2, axis_title_height//2), y_title, fill='black', font=font, anchor='mm')
+    y_title_img = y_title_img.rotate(90, expand=True)
+    
+    # Position Y-axis title to the left
+    y_title_x = 50  # Keep it on the far left
+    y_title_y = label_height + (grid_height // 2) - (y_title_img.height // 2)  # Center with grid
+    canvas.paste(y_title_img, (y_title_x, y_title_y), y_title_img)
+
+
+
     # Add column labels (md values)
     md_labels = [f"md={md:.1f}" for md in md_values]
     for col, label in enumerate(md_labels):
-        x = label_width + sum(col_widths[:col]) + padding * col + col_widths[col]//2
-        y = label_height//2
+        x = label_width + sum(col_widths[:col]) + padding * col + col_widths[col]//2 
+        y = axis_title_height + label_height//2
         draw.text((x, y), label, fill='black', font=font, anchor='mm')
 
+    nn_label_height = 500
+    nn_label_width = 200
 
     # Add row labels (nn values)
     nn_labels = [f"nn={nn}" for nn in nn_values]
     for row, label in enumerate(nn_labels):
-        x = 50
-        y = label_height + sum(row_heights[:row]) + padding * row + row_heights[row]//2
-        draw.text((x, y), label, fill='black', font=font, anchor='lm')
+        # Create a new image for the rotated text
+        label_img = Image.new('RGBA', (nn_label_height, nn_label_width), bg_color)
+        label_draw = ImageDraw.Draw(label_img)
+        
+        # Draw the text vertically
+        label_draw.text((nn_label_height//2, nn_label_width//2), label,
+                        fill='black', font=font, anchor='mm')
+        
+        # Rotate the image
+        label_img = label_img.rotate(90, expand=True)
+        
+        # Calculate position
+        x = y_title_x + axis_title_height + 100  # Increased spacing after y-axis title
+        y = label_height + sum(row_heights[:row]) + padding * row + row_heights[row]//2 - label_img.height//2
+        
+        # Paste the rotated text
+        canvas.paste(label_img, (x, y), label_img)
 
     # Paste plots into grid with offset for labels
     x_offset = label_width
