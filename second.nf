@@ -88,7 +88,12 @@ process EMBEDDINGS {
 
 process HDBSCAN {
     publishDir "${params.outdir}/hdbscan",
-        mode: 'copy'
+        mode: 'copy',
+        saveAs: { filename ->
+            if (filename.startsWith("plots/tiled_image_md")) filename
+            else if (filename.endsWith(".png")) "plots/${filename}"
+            else null
+        }
         
     conda "/home/nolanv/.conda/envs/esm-umap"
     
@@ -96,35 +101,44 @@ process HDBSCAN {
         path coordinates_dir  // Directory containing the pre-generated coordinates
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
+        path plots
         
     output:
-        path "plots/*.{png,svg}", emit: plots     // Plot outputs
+        path "plots/*.png", emit: plots
+        path "plots/tiled_image_md*", emit: tiled_image
 
     script:
     """
 #!/usr/bin/env python3
 import os
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import umap
 import pandas as pd
 import hdbscan
 import random 
+from PIL import Image, ImageDraw, ImageFont
+Image.MAX_IMAGE_PIXELS = None 
 
 #----------v_25_06_25---------------------------------
 # refers to plotted coordinates from 04a umap script to cluster and map providing consistency and efficiency
 
-# Define parameter ranges
-umap_nn = 100
-umap_md = 0.7
-hdbscan_nn_list = [100]
-hdbscan_min_dist_list = [0]
-hdbscan_min_cluster_size_list = [10, 20, 30, 40] #usually 10, 20, 30, 40
 
-# Create required directories
-os.makedirs("plots", exist_ok=True)
-os.makedirs("plots/clusters", exist_ok=True)
+# Tile all plots together
+def load_and_resize_image(filepath, max_width=1200):
+    try:
+        with Image.open(filepath) as img:
+            # Calculate new dimensions maintaining aspect ratio
+            ratio = max_width / img.size[0]
+            new_height = int(img.size[1] * ratio)
+            
+            # Convert to RGB if needed and resize
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            
+            return img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+    except Exception as e:
+        print(f"Error loading image {filepath}: {e}")
+        return None
 
 def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output):
     try:
@@ -205,25 +219,198 @@ print("Loading metadata...")
 module_df = pd.read_csv("${filtered_tsv}", sep='\t')
 metadata_df = pd.read_csv("${metadata_file}", sep='\t')
 
-# Generate plots
-for nn in [100]:
-    for md in [0.7]:
+
+# Create required directories
+os.makedirs("plots", exist_ok=True)
+
+# Copy input UMAP plots to working directory
+os.system("cp ${plots} plots/")
+
+# Generate HDBSCAN plots for each UMAP plot
+for umap_file in os.listdir("plots"):
+    if umap_file.startswith("umap_nn"):
+        # Extract parameters from filename
+        parts = umap_file.replace(".png", "").split("_")
+        nn = int(parts[1].replace("nn", ""))
+        md = float(parts[2].replace("md", "")) / 10
+        md_int = int(md * 10)
+        
+        # Load corresponding coordinates
+        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.npy")
+        id_file = os.path.join("${coordinates_dir}", f"ids/embedding_ids_nn{nn}_md{md_int}.txt")
+        
+        # Generate HDBSCAN plots with different min_cluster_size values
         for mc in [10, 20, 30, 40]:
-            output_path = os.path.join("plots", f"hdbscan_nn{nn}_md{int(md*10)}_minclust{mc}.png")
-            if plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "plots"):
-                print(f"Successfully generated plot for nn={nn}, md={md}, mc={mc}")
-            else:
-                print(f"Failed to generate plot for nn={nn}, md={md}, mc={mc}")
+            output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
+            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "plots")
 
+
+from PIL import Image
+import math
+
+def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)):
+    # Find PNG files
+    png_files = []
+    for f in os.listdir(image_dir):
+        if f.endswith(".png"):
+            if f.startswith("umap_nn") or f.startswith("hdbscan_nn"):
+                png_files.append(os.path.join(image_dir, f))
+    
+    print(f"Found {len(png_files)} PNG files")
+    
+    # Extract parameter values
+    nn_values = set()
+    md_values = set()
+    for filename in png_files:
+        base = os.path.basename(filename)
+        parts = base.replace(".png", "").split("_")
+        try:
+            nn = int(parts[1].replace("nn", ""))
+            md = float(parts[2].replace("md", ""))
+            nn_values.add(nn)
+            md_values.add(md)
+        except (IndexError, ValueError):
+            continue
+
+    nn_values = sorted(list(nn_values))  # [75, 100, 125]
+    md_values = sorted(list(md_values))
+    mc_values = sorted([10, 20, 30, 40])
+
+    # Process each md value separately
+    for md in md_values:
+        md_int = int(md)
+        images_by_row = {}  # Dictionary to store images for each row (nn value)
+        
+        # First, collect UMAP images for each nn value
+        for nn in nn_values:
+            umap_file = f"umap_nn{nn}_md{md_int}.png"
+            umap_path = os.path.join(image_dir, umap_file)
+            if os.path.exists(umap_path):
+                print(f"Loading UMAP: {umap_file}")
+                img = Image.open(umap_path)
+                if img.size[0] > 1200:
+                    ratio = 1200 / img.size[0]
+                    new_size = (1200, int(img.size[1] * ratio))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+                images_by_row[nn] = [img]  # Start row with UMAP image
+        
+        # Then add HDBSCAN images for each nn value
+        for nn in nn_values:
+            if nn in images_by_row:  # Only process if we have a UMAP image for this nn
+                for mc in mc_values:
+                    hdbscan_file = f"hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
+                    hdbscan_path = os.path.join(image_dir, hdbscan_file)
+                    if os.path.exists(hdbscan_path):
+                        print(f"Loading HDBSCAN: {hdbscan_file}")
+                        img = Image.open(hdbscan_path)
+                        if img.size[0] > 1200:
+                            ratio = 1200 / img.size[0]
+                            new_size = (1200, int(img.size[1] * ratio))
+                            img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        images_by_row[nn].append(img)
+
+        # Calculate grid dimensions
+        rows = len(nn_values)
+        cols = 1 + len(mc_values)  # UMAP + HDBSCAN plots
+        
+        max_width = max(img.size[0] for row_images in images_by_row.values() for img in row_images)
+        max_height = max(img.size[1] for row_images in images_by_row.values() for img in row_images)
+
+        grid_width = (max_width * cols) + (padding * (cols - 1))
+        grid_height = (max_height * rows) + (padding * (rows - 1))
+        
+        label_height = 300
+        label_width = 300  
+        axis_title_height = 100
+
+        # Create canvas
+        total_width = grid_width + label_width + padding * 2
+        total_height = grid_height + label_height + axis_title_height * 2
+        canvas = Image.new('RGBA', (total_width, total_height), bg_color)
+
+        draw = ImageDraw.Draw(canvas)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+
+        # Add main title
+        title = f"UMAP and HDBSCAN Clustering (md={md:.1f})"
+        bbox = draw.textbbox((0, 0), title, font=font)
+        text_width = bbox[2] - bbox[0]
+        draw.text((grid_width//2, axis_title_height//2), title, 
+                fill='black', font=font, anchor='mm')
+
+        # Add X-axis title
+        x_title = "Minimum Cluster Size"
+        x_title_img = Image.new('RGBA', (grid_width, axis_title_height), bg_color)
+        x_draw = ImageDraw.Draw(x_title_img)
+        x_draw.text((grid_width//2, axis_title_height//2), x_title, 
+                fill='black', font=font, anchor='mm')
+        canvas.paste(x_title_img, (label_width, axis_title_height))
+
+        # Add Y-axis title (Number of Neighbors)
+        y_title = "Number of Neighbors (nn)"
+        y_title_img = Image.new('RGBA', (grid_height, axis_title_height), bg_color)
+        y_draw = ImageDraw.Draw(y_title_img)
+        y_draw.text((grid_height//2, axis_title_height//2), y_title, 
+                fill='black', font=font, anchor='mm')
+        y_title_img = y_title_img.rotate(90, expand=True)
+        canvas.paste(y_title_img, (padding * 2, label_height + (grid_height // 2) - (y_title_img.height // 2)))
+
+        # Add column labels
+        draw.text((label_width + max_width//2, axis_title_height * 2), "UMAP",  # Positioned closer to title
+                fill='black', font=font, anchor='mm')
+        for col, mc in enumerate(mc_values, 1):
+            x = label_width + col * (max_width + padding) + max_width//2
+            draw.text((x, axis_title_height * 2), f"MC={mc}",  # Positioned closer to title
+                    fill='black', font=font, anchor='mm')
+
+        # Add row labels
+        for row, nn in enumerate(nn_values):
+            # Create new image for rotated text
+            label_text = f"nn={nn}"
+            label_img = Image.new('RGBA', (max_height, label_width//2), bg_color)
+            label_draw = ImageDraw.Draw(label_img)
+            
+            # Draw text horizontally (it will be rotated later)
+            label_draw.text((max_height//2, label_width//4), label_text,
+                            fill='black', font=font, anchor='mm')
+            
+            # Rotate the image 90 degrees
+            label_img = label_img.rotate(90, expand=True)
+            
+            # Calculate position with reduced spacing
+            x = label_width//3  # Reduced from label_width//2
+            y = label_height + row * (max_height + padding) + max_height//2 - label_img.height//2
+            
+            # Paste the rotated label
+            canvas.paste(label_img, (x, y), label_img)
+
+        # Paste images
+        for row_idx, nn in enumerate(nn_values):
+            if nn in images_by_row:
+                for col_idx, img in enumerate(images_by_row[nn]):
+                    x = label_width + col_idx * (max_width + padding)
+                    y = label_height + row_idx * (max_height + padding)
+                    canvas.paste(img, (x, y))
+        
+        # Save the tiled image for this md value
+        output_file = f"{output_prefix}_md{md_int}.png"
+        canvas.save(output_file, optimize=True, quality=85)
+        print(f"Saved tiled image for md={md:.1f}: {output_file}")
+
+# Call the function
+tile_images("plots", "plots/tiled_image")
     """
-
 }
 
 
 
 process UMAP_PROJECTION {
     publishDir "${params.outdir}/umap",
-        mode: 'copy'
+        mode: 'copy',
+        saveAs: { filename ->
+            if (filename.endsWith("tiled_image.png")) filename
+            else null
+        }
         
     conda "/home/nolanv/.conda/envs/esm-umap"
     
@@ -233,7 +420,8 @@ process UMAP_PROJECTION {
         path metadata_file   // Metadata file with colors/markers
         
     output:
-        path "plots/tiled_image.png", emit: plots     // Plot outputs
+        path "plots/tiled_image.png", emit: tiled_image
+        path "plots/*.png", emit: plots
         
     script:
     def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
@@ -461,7 +649,7 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
     canvas.paste(x_title_img, (x_title_x, x_title_y))
 
     # Create and rotate Y-axis title
-    y_title = "Number of Neighbors (nn)"
+    y_title = "Nearest Neighbors (nn)"
     y_title_img = Image.new('RGBA', (grid_height, axis_title_height), bg_color)
     y_draw = ImageDraw.Draw(y_title_img)
     y_draw.text((grid_height//2, axis_title_height//2), y_title, fill='black', font=font, anchor='mm')
@@ -1019,22 +1207,25 @@ workflow {
     // )
 
     // ch_coordinates = GENERATE_COORDINATES(
-    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/embeddings",
+    //     ch_embeddings,
     //     ch_filtered_tsv
     // )
 
-
-
     // remember to fix the input from coordinates the same way you did to pasv output.
-    UMAP_PROJECTION(
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/coordinates",
-        ch_filtered_tsv,
-        ch_metadata
-    )
-
-    // HDBSCAN(
+    // ch_umap = UMAP_PROJECTION(
     //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/coordinates",
+    //     // ch_coordinates,
     //     ch_filtered_tsv,
     //     ch_metadata
     // )
+
+    ch_hbd = HDBSCAN(
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test/coordinates",
+        // ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata,
+        // ch_umap.plots
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/da/3a0637061590d10d1b61f71e51a609/plots"
+        
+    )
 }
