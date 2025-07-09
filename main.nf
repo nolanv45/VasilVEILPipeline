@@ -27,8 +27,9 @@ process CLEAN_FASTA_HEADERS {
 }
 
 process PHIDRA {
+    ext.dataset = null
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/phidra", mode: 'copy', saveAs: { filename ->
+    publishDir "${params.outdir}/${task.ext.dataset}/phidra", mode: 'copy', saveAs: { filename ->
         if (filename.endsWith("pfam_validated_full_protein.fa")) "validated_sequences/${filename}"
         else if (filename.contains("_TopHit_Evalue.tsv")) "mmseqs_results/${filename}"
         else null
@@ -64,9 +65,10 @@ process PHIDRA {
 
 
 process PASV {
+    ext.dataset = null
     conda "/home/nolanv/.conda/envs/phidra"
     cpus 4
-    publishDir "${params.outdir}/pasv/${protein}", 
+    publishDir "${params.outdir}/${task.ext.dataset}/pasv/${protein}", 
         mode: 'copy',
         pattern: "pasv_output/output/*.tsv"
 
@@ -144,9 +146,10 @@ process PASV {
 
 
 process ANALYZE_AND_PLOT {
+    ext.dataset = null
     debug true
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}", 
+    publishDir "${params.outdir}/${task.ext.dataset}", 
         mode: 'copy',
         saveAs: { filename ->
             if (filename.endsWith('.tsv')) "phidra_analysis/stats/${filename}"
@@ -227,8 +230,9 @@ process ANALYZE_AND_PLOT {
 
 
 process PASV_POST {
+    ext.dataset = null
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/pasv_analysis/${protein}",
+    publishDir "${params.outdir}/${task.ext.dataset}/pasv_analysis/${protein}",
         mode: 'copy',
         pattern: "*.{tsv,png}"
 
@@ -403,9 +407,10 @@ print(sig_stats.sort_values('count', ascending=False))
 }
 
 process STANDARDIZE_OUTPUTS {
+    ext.dataset = null
     debug true
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}", 
+    publishDir "${params.outdir}/${task.ext.dataset}", 
         mode: 'copy',
         pattern: "*.tsv"
 
@@ -483,8 +488,9 @@ process STANDARDIZE_OUTPUTS {
 
 
 process phidra_only_summary {
+    ext.dataset = null
     debug true
-    publishDir "${params.outdir}/phidra/phidra_only/${protein}", 
+    publishDir "${params.outdir}/${task.ext.dataset}/phidra/phidra_only/${protein}", 
         mode: 'copy',
         pattern: "*.tsv"
     conda "/home/nolanv/.conda/envs/phidra"
@@ -534,8 +540,9 @@ process phidra_only_summary {
 
 
 process annotate_top_hits {
+    ext.dataset = null
     debug true
-    publishDir "${params.outdir}/phidra/annotate_hits/${protein}", 
+    publishDir "${params.outdir}/${task.ext.dataset}/phidra/annotate_hits/${protein}", 
         mode: 'copy',
         pattern: "*_annotated_hits.tsv"
 
@@ -631,9 +638,10 @@ if __name__ == "__main__":
 
 
 process DUPLICATE_HANDLE {
+    ext.dataset = null
     debug true
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}", 
+    publishDir "${params.outdir}/${task.ext.dataset}", 
         mode: 'copy',
         pattern: "*.tsv"
 
@@ -668,9 +676,10 @@ process DUPLICATE_HANDLE {
 
 
 process COMBINE_PHIDRA_TSV {
+    ext.dataset = null
     debug true
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/phidra_analysis", 
+    publishDir "${params.outdir}/${task.ext.dataset}/phidra_analysis", 
         mode: 'copy',
         pattern: "*.tsv"
 
@@ -717,7 +726,8 @@ process COMBINE_PHIDRA_TSV {
 
 
 process SPLIT_BY_GENOFEATURE {
-    publishDir "${params.outdir}",
+    ext.dataset = null
+    publishDir "${params.outdir}/${task.ext.dataset}",
         mode: 'copy'
 
     input:
@@ -770,89 +780,205 @@ process SPLIT_BY_GENOFEATURE {
 
 
 workflow {
-    ch_input_fasta = Channel.fromPath(params.input_fasta)
-    // def ch_input = Channel.fromList(params.proteins)
+    // Create a channel from the datasets map
+    Channel.fromList(params.datasets.collect { name, path -> 
+        tuple(name, path)
+    })
+    .view { dataset_name, input_fasta -> 
+        println "Processing dataset: $dataset_name with fasta: $input_fasta"
+    }
+    .set { ch_datasets }
 
-    CLEAN_FASTA_HEADERS(ch_input_fasta)
+    // Process each dataset separately
+    ch_datasets.map { dataset_name, input_fasta ->
+        PHIDRA.ext.dataset = dataset_name
+        PASV.ext.dataset = dataset_name
+        annotate_top_hits.ext.dataset = dataset_name
+        PASV_POST.ext.dataset = dataset_name
+        ANALYZE_AND_PLOT.ext.dataset = dataset_name
+        STANDARDIZE_OUTPUTS.ext.dataset = dataset_name
+        DUPLICATE_HANDLE.ext.dataset = dataset_name
+        COMBINE_PHIDRA_TSV.ext.dataset = dataset_name
+        SPLIT_BY_GENOFEATURE.ext.dataset = dataset_name
+        phidra_only_summary.ext.dataset = dataset_name
 
+        // Clean headers for each dataset
+        def cleaned_fasta = CLEAN_FASTA_HEADERS(input_fasta)
 
-    ch_proteins = Channel.fromList(params.proteins)
-        .combine(CLEAN_FASTA_HEADERS.out.fasta)
-        .map { config, cleaned_fasta -> 
-            // Add the cleaned fasta path to the config
-            config + [input_fasta: cleaned_fasta]
-        }
+        def dataset_proteins = Channel.fromList(params.proteins)
+            .combine(cleaned_fasta.fasta)
+            .map { config, cleaned -> 
+                config + [input_fasta: cleaned]
+            }
 
-    PHIDRA(ch_proteins)
-        .branch { protein, fasta, init_search, rec_search ->
-            def name = protein.toLowerCase()
-            annotation: name in ['polb', 'helicase']
-            pasv: name in ['pola', 'rnr']
-            phidra_only: true
-        }
-        .set { branched }
+        // Process proteins for this dataset
+        PHIDRA(dataset_proteins)
+                .branch { protein, fasta, init_search, rec_search ->
+                    def name = protein.toLowerCase()
+                    annotation: name in ['polb', 'helicase']
+                    pasv: name in ['pola', 'rnr']
+                    phidra_only: true
+                }
+                .set { branched }
 
-    def ch_annotation = branched.annotation
-        .filter { it != null }
-        .map { protein, fasta, init_search, rec_search ->
-            tuple(protein, fasta, init_search, rec_search)
-        }
-        | annotate_top_hits
-        | map { protein, file -> file }
+        def ch_annotation = branched.annotation
+            .filter { it != null }
+            .map { protein, fasta, init_search, rec_search ->
+                tuple(protein, fasta, init_search, rec_search)
+            }
+            | annotate_top_hits
+            | map { protein, file -> file }
 
-    def ch_pasv_results = branched.pasv
-        .filter { it != null }
-        .map { protein, fasta, init_search, rec_search ->
-            def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
-            def align_refs = file(proteinConfig.pasv_align_refs)
-            tuple(protein, fasta, align_refs)
-        }
-        | PASV
-        | PASV_POST
+        def ch_pasv_results = branched.pasv
+            .filter { it != null }
+            .map { protein, fasta, init_search, rec_search ->
+                def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
+                def align_refs = file(proteinConfig.pasv_align_refs)
+                tuple(protein, fasta, align_refs)
+            }
+            | PASV
+            | PASV_POST
 
-    def ch_phidra_only = branched.phidra_only
-        .filter { it != null }
-        .map { protein, fasta, init_search, rec_search ->
-            tuple(protein, fasta)
-        }
-        | phidra_only_summary
-        | map { protein, file -> file }
+        def ch_phidra_only = branched.phidra_only
+            .filter { it != null }
+            .map { protein, fasta, init_search, rec_search ->
+                tuple(protein, fasta)
+            }
+            | phidra_only_summary
+            | map { protein, file -> file }
 
-    def ch_pasv_processed = ch_pasv_results
-        .map { protein, processed_file, stats, plot ->
-            // Return only the processed file for combining with annotation results
-            processed_file
-        }
+        def ch_pasv_processed = ch_pasv_results
+            .map { protein, processed_file, stats, plot ->
+                // Return only the processed file for combining with annotation results
+                processed_file
+            }
 
-    def ch_combined_phidra_results = Channel.empty()
-        .mix(ch_annotation, ch_phidra_only)
-        .collect()
-        .map { files -> tuple('combined', files) }  
-        .view { "[DEBUG] Processing files: ${it[1]}" }
-        | COMBINE_PHIDRA_TSV
+        def ch_combined_phidra_results = Channel.empty()
+            .mix(ch_annotation, ch_phidra_only)
+            .collect()
+            .map { files -> tuple('combined', files) }  
+            .view { "[DEBUG] Processing files: ${it[1]}" }
+            | COMBINE_PHIDRA_TSV
 
-    // Use the same channel output for both processes
-    ch_combined_phidra_results | ANALYZE_AND_PLOT
+        // Use the same channel output for both processes
+        ch_combined_phidra_results | ANALYZE_AND_PLOT
 
-    // Mix with PASV results and standardize
-    def ch_standardized_output = Channel.empty()
-        .mix(
-            ch_combined_phidra_results,
-            ch_pasv_processed
+        // Mix with PASV results and standardize
+        def ch_standardized_output = Channel.empty()
+            .mix(
+                ch_combined_phidra_results,
+                ch_pasv_processed
+            )
+            .collect()
+            .map { files -> 
+                def flattened = files.flatten()
+                println "[DEBUG] Files to standardize: ${flattened}"
+                tuple('combined', flattened) 
+            }
+            | STANDARDIZE_OUTPUTS
+
+        def ch_duplicated_output = ch_standardized_output
+            | DUPLICATE_HANDLE
+
+        def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+            ch_standardized_output,
+            CLEAN_FASTA_HEADERS.out.fasta
         )
-        .collect()
-        .map { files -> 
-            def flattened = files.flatten()
-            println "[DEBUG] Files to standardize: ${flattened}"
-            tuple('combined', flattened) 
-        }
-        | STANDARDIZE_OUTPUTS
-
-    def ch_duplicated_output = ch_standardized_output
-        | DUPLICATE_HANDLE
-
-    def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-        ch_standardized_output,
-        CLEAN_FASTA_HEADERS.out.fasta
-    )
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+    // ch_input_fasta = Channel.fromPath(params.input_fasta)
+    // // def ch_input = Channel.fromList(params.proteins)
+
+    // CLEAN_FASTA_HEADERS(ch_input_fasta)
+
+
+    // ch_proteins = Channel.fromList(params.proteins)
+    //     .combine(CLEAN_FASTA_HEADERS.out.fasta)
+    //     .map { config, cleaned_fasta -> 
+    //         // Add the cleaned fasta path to the config
+    //         config + [input_fasta: cleaned_fasta]
+    //     }
+
+    // PHIDRA(ch_proteins)
+    //     .branch { protein, fasta, init_search, rec_search ->
+    //         def name = protein.toLowerCase()
+    //         annotation: name in ['polb', 'helicase']
+    //         pasv: name in ['pola', 'rnr']
+    //         phidra_only: true
+    //     }
+    //     .set { branched }
+
+    // def ch_annotation = branched.annotation
+    //     .filter { it != null }
+    //     .map { protein, fasta, init_search, rec_search ->
+    //         tuple(protein, fasta, init_search, rec_search)
+    //     }
+    //     | annotate_top_hits
+    //     | map { protein, file -> file }
+
+    // def ch_pasv_results = branched.pasv
+    //     .filter { it != null }
+    //     .map { protein, fasta, init_search, rec_search ->
+    //         def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
+    //         def align_refs = file(proteinConfig.pasv_align_refs)
+    //         tuple(protein, fasta, align_refs)
+    //     }
+    //     | PASV
+    //     | PASV_POST
+
+    // def ch_phidra_only = branched.phidra_only
+    //     .filter { it != null }
+    //     .map { protein, fasta, init_search, rec_search ->
+    //         tuple(protein, fasta)
+    //     }
+    //     | phidra_only_summary
+    //     | map { protein, file -> file }
+
+    // def ch_pasv_processed = ch_pasv_results
+    //     .map { protein, processed_file, stats, plot ->
+    //         // Return only the processed file for combining with annotation results
+    //         processed_file
+    //     }
+
+    // def ch_combined_phidra_results = Channel.empty()
+    //     .mix(ch_annotation, ch_phidra_only)
+    //     .collect()
+    //     .map { files -> tuple('combined', files) }  
+    //     .view { "[DEBUG] Processing files: ${it[1]}" }
+    //     | COMBINE_PHIDRA_TSV
+
+    // // Use the same channel output for both processes
+    // ch_combined_phidra_results | ANALYZE_AND_PLOT
+
+    // // Mix with PASV results and standardize
+    // def ch_standardized_output = Channel.empty()
+    //     .mix(
+    //         ch_combined_phidra_results,
+    //         ch_pasv_processed
+    //     )
+    //     .collect()
+    //     .map { files -> 
+    //         def flattened = files.flatten()
+    //         println "[DEBUG] Files to standardize: ${flattened}"
+    //         tuple('combined', flattened) 
+    //     }
+    //     | STANDARDIZE_OUTPUTS
+
+    // def ch_duplicated_output = ch_standardized_output
+    //     | DUPLICATE_HANDLE
+
+    // def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+    //     ch_standardized_output,
+    //     CLEAN_FASTA_HEADERS.out.fasta
+    // )
