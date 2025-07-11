@@ -1,22 +1,20 @@
 nextflow.enable.dsl=2
 
 process CLEAN_FASTA_HEADERS {
-    
+    tag "${meta.id}"
     conda "/home/nolanv/.conda/envs/phidra"
 
     input:
-        path(fasta)
+        tuple val(meta), path(fasta)
 
     output:
-        path("*cleaned_input.fasta"), emit: fasta
+        tuple val(meta), path("${meta.id}_cleaned.fasta"), emit: fasta
 
     script:
     """
-    # First replace dots with hyphens in headers
+    # Clean headers
     seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
-
-    # Then remove stop codons (*) from sequences
-    seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "cleaned_input.fasta"
+    seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
     rm temp.fasta
 
     cat <<-END_VERSIONS > versions.yml
@@ -27,22 +25,25 @@ process CLEAN_FASTA_HEADERS {
 }
 
 process PHIDRA {
-    ext.dataset = null
+    tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}/phidra", mode: 'copy', saveAs: { filename ->
-        if (filename.endsWith("pfam_validated_full_protein.fa")) "validated_sequences/${filename}"
-        else if (filename.contains("_TopHit_Evalue.tsv")) "mmseqs_results/${filename}"
-        else null
-    }
+    publishDir "${params.outdir}/${meta.id}/phidra",
+        mode: 'copy',
+        saveAs: { filename ->
+            if (filename.endsWith("pfam_validated_full_protein.fa")) "validated_sequences/${filename}"
+            else if (filename.contains("_TopHit_Evalue.tsv")) "mmseqs_results/${filename}"
+            else null
+        }
 
     input:
-        val protein_config
+        tuple val(meta), path(fasta)
 
     output:
-        tuple val(protein_config.protein), 
+        tuple val(meta), 
               path("*/final_results/pfam_validated_full_protein.fa"), 
-              path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"), 
-              path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv")
+              path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"),
+              path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv"),
+              emit: results
 
     script:
     """
@@ -52,64 +53,64 @@ process PHIDRA {
 
     cd ${params.phidra_dir}
 
-    python phidra_run.py \
-        -i ${protein_config.input_fasta} \
-        -db ${protein_config.subjectDB} \
-        -pfam ${params.pfamDB} \
-        -ida ${protein_config.pfamDomain} \
-        -f ${protein_config.protein} \
-        -o \$WORK_DIR \
-        -t 24
+    INPUT_FASTA=\$WORK_DIR/${fasta}
+
+    python phidra_run.py \\
+        -i \$INPUT_FASTA \\
+        -db ${meta.subjectDB} \\
+        -pfam ${params.pfamDB} \\
+        -ida ${meta.pfamDomain} \\
+        -f ${meta.protein} \\
+        -o \$WORK_DIR \\
+        -t ${task.cpus}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version | sed 's/Python //')
+    END_VERSIONS
     """
 }
 
-
 process PASV {
-    ext.dataset = null
+    tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
     cpus 4
-    publishDir "${params.outdir}/${task.ext.dataset}/pasv/${protein}", 
+    publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
         mode: 'copy',
         pattern: "pasv_output/output/*.tsv"
 
     input:
-    tuple val(protein), path(fasta), path(align_refs)
+        tuple val(meta), path(fasta), path(align_refs)
 
     output:
-    tuple val(protein), file("pasv_output/output/${protein}_putative.pasv_signatures.tsv")
+        tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
 
     script:
+    def protein_lower = meta.protein.toLowerCase()
     """
-    #!/usr/bin/env bash
-    set -e  # Exit on error
-
-    # Create directories
     mkdir -p pasv_output/{input,output,pasv}
 
-    # Convert protein name to lowercase for comparison
-    protein_lower=\$(echo "${protein}" | tr '[:upper:]' '[:lower:]')
-
-    # Map protein names to PASV expected names and settings
-    if [ "\${protein_lower}" == "pola" ]; then
-        mapped_name="${protein}_putative"
+    # Map protein names to settings
+    if [ "${protein_lower}" == "pola" ]; then
+        mapped_name="${meta.protein}_putative"
         roi_start=521
         roi_end=923
         cat_sites="668,705,758,762"
-    elif [ "\${protein_lower}" == "rnr" ]; then
-        mapped_name="${protein}_putative"
+    elif [ "${protein_lower}" == "rnr" ]; then
+        mapped_name="${meta.protein}_putative"
         roi_start=437
         roi_end=625
         cat_sites="437,439,441,462,438"
     else
-        echo "Error: Unknown protein ${protein}"
+        echo "Error: Unknown protein ${meta.protein}"
         exit 1
     fi
 
-    # Copy and prepare input files
+    # Prepare input files
     cp "${fasta}" "pasv_output/input/\${mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
-    # Download and prepare PASV if needed
+    # Setup PASV
     PASV_DIR="pasv_output/pasv"
     if [ ! -f "\${PASV_DIR}/pasv" ]; then
         mkdir -p "\${PASV_DIR}"
@@ -117,7 +118,6 @@ process PASV {
         wget -q https://github.com/mooreryan/pasv/releases/download/2.0.2/pasv-2.0.2-alpine-static.zip
         unzip pasv-2.0.2-alpine-static.zip
         chmod 755 pasv
-        ./pasv --help
         cd -
     fi
 
@@ -133,23 +133,96 @@ process PASV {
         pasv_output/input/align_refs.fa \\
         \${cat_sites}
 
-    # Rename output file if it exists
-    # PASV_FILE="pasv_output/output/\${mapped_name}.pasv_signatures.tsv"
-    #if [ -f "\${PASV_FILE}" ]; then
-     #   mv "\${PASV_FILE}" "pasv_output/output/${protein}_putative.pasv_signatures.tsv"
-    #else
-     #   echo "Error: PASV did not produce expected output file: \${PASV_FILE}"
-      #  exit 1
-    #fi
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        pasv: \$(\${PASV_DIR}/pasv --version | sed 's/pasv //')
+    END_VERSIONS
     """
 }
 
+// process PASV_POST {
+//     tag "${meta.id}:${meta.protein}"
+//     conda "/home/nolanv/.conda/envs/phidra"
+//     publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
+//         mode: 'copy',
+//         pattern: "*.{tsv,png}"
+
+//     input:
+//         tuple val(meta), path(pasv_file)
+
+//     output:
+//         tuple val(meta),
+//               path("${meta.protein}_processed.tsv"),
+//               path("${meta.protein}_signature_stats.tsv"),
+//               path("${meta.protein}_signature_distribution.png"),
+//               emit: results
+//         path "versions.yml", emit: versions
+
+//     script:
+//     """
+//     #!/usr/bin/env python3
+//     import pandas as pd
+//     import matplotlib.pyplot as plt
+//     import seaborn as sns
+
+//     def pasv_post(file, protein):
+//         # Process PASV output
+//         df = pd.read_csv(file, sep='\t')
+//         gapless = df[~df['signature'].str.contains('-')].copy()
+//         gapless['orf_length'] = gapless['name'].apply(
+//             lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
+//         )
+
+//         def classify_span(s):
+//             s = s.lower()
+//             if 'both' in s: return 'both'
+//             elif 'start' in s: return 'start'
+//             elif 'end' in s: return 'end'
+//             elif 'neither' in s: return 'neither'
+//             return 'unknown'
+
+//         gapless['span_class'] = gapless['spans'].apply(classify_span)
+//         tally = gapless.groupby(['signature', 'span_class']).size().reset_index(name='count')
+
+//         sig_stats = gapless.groupby('signature').agg({
+//             'orf_length': ['count', 'mean']
+//         }).reset_index()
+//         sig_stats.columns = ['signature', 'count', 'mean_length']
+//         sig_stats['protein'] = protein
+        
+//         return gapless, tally, sig_stats
+
+//     def plot_boxplots(df, tally, output_file, protein):
+//         plt.figure(figsize=(12, 6))
+//         sns.boxplot(data=df, x='signature', y='orf_length')
+//         plt.xticks(rotation=45)
+//         plt.title(f"{protein} Length Distribution by Signature")
+//         plt.tight_layout()
+//         plt.savefig(output_file)
+//         plt.close()
+
+//     # Process the PASV file
+//     processed_df, tally, sig_stats = pasv_post("${pasv_file}", "${meta.protein}")
+
+//     # Save results
+//     processed_df.to_csv("${meta.protein}_processed.tsv", sep='\t', index=False)
+//     sig_stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\t', index=False)
+//     plot_boxplots(processed_df, tally, "${meta.protein}_signature_distribution.png", "${meta.protein}")
+
+//     with open("versions.yml", "w") as f:
+//         f.write(f'''
+// "${task.process}":
+//     python: {pd.__version__}
+//     pandas: {pd.__version__}
+//     matplotlib: {plt.__version__}
+// ''')
+//     """
+// }
 
 process ANALYZE_AND_PLOT {
-    ext.dataset = null
-    debug true
+    tag "${meta.id}"
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}", 
+    publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
             if (filename.endsWith('.tsv')) "phidra_analysis/stats/${filename}"
@@ -158,11 +231,13 @@ process ANALYZE_AND_PLOT {
         }
 
     input:
-    path(input_tsv)
+        tuple val(meta), path(input_tsv)
 
     output:
-    path "protein_stats.tsv"
-    path "length_distribution.png"
+        tuple val(meta), 
+              path("protein_stats.tsv"),
+              path("length_distribution.png"),
+              emit: results
 
     script:
     """
@@ -230,20 +305,20 @@ process ANALYZE_AND_PLOT {
 
 
 process PASV_POST {
-    ext.dataset = null
+    tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}/pasv_analysis/${protein}",
+    publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
         mode: 'copy',
         pattern: "*.{tsv,png}"
 
     input:
-    tuple val(protein), file(pasv_file)
+    tuple val(meta), file(pasv_file)
 
     output:
-    tuple val(protein), 
-        file("${protein}_processed.tsv"),
-        file("${protein}_signature_stats.tsv"),
-        file("${protein}_signature_distribution.png")
+    tuple val(meta), 
+        file("${meta.protein}_processed.tsv"),
+        file("${meta.protein}_signature_stats.tsv"),
+        file("${meta.protein}_signature_distribution.png")
 
     script:
     """
@@ -391,7 +466,7 @@ def boxplots(df, tally, output_file, protein):
 
 
 # Process the PASV file
-protein = "${protein}"
+protein = "${meta.protein}"
 processed_df, tally, sig_stats = pasv_post("${pasv_file}", protein)
 
 # Save processed results
@@ -407,18 +482,18 @@ print(sig_stats.sort_values('count', ascending=False))
 }
 
 process STANDARDIZE_OUTPUTS {
-    ext.dataset = null
-    debug true
+    tag "${meta.id}"
+
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}", 
+    publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
 
     input:
-    tuple val(tag), path(tsv_files)
+    tuple val(meta), path(tsv_files)
 
     output:
-    path "combined_results.tsv"
+    tuple val(meta), path("combined_results.tsv"), emit: standardized
 
     script:
     """
@@ -487,26 +562,25 @@ process STANDARDIZE_OUTPUTS {
 
 
 
-process phidra_only_summary {
-    ext.dataset = null
-    debug true
-    publishDir "${params.outdir}/${task.ext.dataset}/phidra/phidra_only/${protein}", 
+process PHIDRA_ONLY_SUMMARY {
+    tag "${meta.id}:${meta.protein}"
+    publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${protein}", 
         mode: 'copy',
         pattern: "*.tsv"
     conda "/home/nolanv/.conda/envs/phidra"
 
     input:
-    tuple val(protein), file(fasta)
+        tuple val(meta), path(fasta)
 
     output:
-    tuple val(protein), file("${protein}_phidra_only.tsv")
+        tuple val(meta), path("${meta.protein}_phidra_only.tsv"), emit: results
 
     script:
     """
     #!/usr/bin/env python3
     import pandas as pd
     
-    protein = "${protein}"
+    protein = "${meta.protein}"
 
     # Process FASTA file to get ORF information
     orfs = []
@@ -531,29 +605,28 @@ process phidra_only_summary {
     
     # Create and save DataFrame
     df = pd.DataFrame(results)
-    df.to_csv("${protein}_phidra_only.tsv", sep='\\t', index=False)
+    df.to_csv("${meta.protein}_phidra_only.tsv", sep='\\t', index=False)
 
-    print(f"Processed {len(results)} ORFs with no hits for ${protein}")
+    print(f"Processed {len(results)} ORFs with no hits for ${meta.protein}")
     """
 }
 
 
 
-process annotate_top_hits {
-    ext.dataset = null
-    debug true
-    publishDir "${params.outdir}/${task.ext.dataset}/phidra/annotate_hits/${protein}", 
+process ANNOTATE_HITS {
+    tag "${meta.id}:${meta.protein}"
+    publishDir "${params.outdir}/${meta.id}/phidra/annotate_hits/${meta.protein}", 
         mode: 'copy',
         pattern: "*_annotated_hits.tsv"
 
     input:
-    tuple val(protein), 
+    tuple val(meta), 
           path(pfam_validated_fasta),
           path(initial_search, stageAs: 'initial_search.tsv'), 
           path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
-    tuple val(protein), file("${protein}_annotated_hits.tsv")
+    tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
 
     script:
     """
@@ -562,11 +635,11 @@ import sys
 import os
 from Bio import SeqIO
 
-protein = "${protein}"
+protein = "${meta.protein}"
 pfam_validated_fasta = "${pfam_validated_fasta}"
 file1_path = "initial_search.tsv"
 file2_path = "recursive_search.tsv"
-output_file = "${protein}_annotated_hits.tsv"
+output_file = "${meta.protein}_annotated_hits.tsv"
 
 def load_validated_ids():
     validated_ids = set()
@@ -638,18 +711,18 @@ if __name__ == "__main__":
 
 
 process DUPLICATE_HANDLE {
-    ext.dataset = null
+    tag "${meta.id}"
     debug true
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}", 
+    publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
 
     input:
-        path input_file    // Properly declare the input file
+        tuple val(meta), path(input_file)    // Properly declare the input file
 
     output:
-        path "duplicate_orfs.tsv"   // Declare the output file
+        tuple val(meta), path("duplicate_orfs.tsv")   // Declare the output file
 
     script:
     """
@@ -676,18 +749,16 @@ process DUPLICATE_HANDLE {
 
 
 process COMBINE_PHIDRA_TSV {
-    ext.dataset = null
-    debug true
+    tag "${meta.id}"
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${task.ext.dataset}/phidra_analysis", 
-        mode: 'copy',
-        pattern: "*.tsv"
+    publishDir "${params.outdir}/${meta.id}/phidra_analysis", 
+        mode: 'copy'
 
     input:
-    tuple val(tag), path(tsv_files)
+    tuple val(meta), path('*.tsv')
 
     output:
-    path 'combined_phidra_output.tsv'
+        tuple val(meta), path('combined_phidra_output.tsv'), emit: combined
 
     script:
     """
@@ -700,7 +771,7 @@ process COMBINE_PHIDRA_TSV {
     print(os.listdir('.'))
 
     # Get list of input files
-    tsv_files = "${tsv_files}".split()  
+    tsv_files = glob.glob('*.tsv')
     print(f"Processing TSV files: {tsv_files}")
 
     dfs = []
@@ -726,16 +797,16 @@ process COMBINE_PHIDRA_TSV {
 
 
 process SPLIT_BY_GENOFEATURE {
-    ext.dataset = null
-    publishDir "${params.outdir}/${task.ext.dataset}",
+    tag "${meta.id}"
+    publishDir "${params.outdir}/${meta.id}",
         mode: 'copy'
 
     input:
-        path filtered_tsv 
-        path input_fasta
+        tuple val(meta), path(filtered_tsv)
+        tuple val(meta), path(input_fasta)
 
     output:
-        path "files_for_embeddings", emit: fastas_for_embeddings
+        tuple val(meta), path("files_for_embeddings"), emit: fastas_for_embeddings
 
     script:
     """
@@ -774,211 +845,114 @@ process SPLIT_BY_GENOFEATURE {
             if matching_seqs:
                 SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
             
-            print(f"Processed {protein}/{genofeature}: {len(matching_seqs)} sequences")
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version | sed 's/Python //')
+        biopython: \$(python -c "import Bio; print(Bio.__version__)")
+        pandas: \$(python -c "import pandas; print(pandas.__version__)")
+    END_VERSIONS
     """
 }
 
 
 workflow {
-    // Create a channel from the datasets map
-    Channel.fromList(params.datasets.collect { name, path -> 
-        tuple(name, path)
-    })
-    .view { dataset_name, input_fasta -> 
-        println "Processing dataset: $dataset_name with fasta: $input_fasta"
-    }
-    .set { ch_datasets }
+    // Create dataset channels
+    Channel
+        .fromList(params.datasets.entrySet())
+        .map { entry -> 
+            def meta = [
+                id: entry.key,      // Dataset identifier
+                path: entry.value   // Dataset file path
+            ]
+            tuple(meta, meta.path)
+        }
+        .set { ch_datasets }
 
-    // Process each dataset separately
-    ch_datasets.map { dataset_name, input_fasta ->
-        PHIDRA.ext.dataset = dataset_name
-        PASV.ext.dataset = dataset_name
-        annotate_top_hits.ext.dataset = dataset_name
-        PASV_POST.ext.dataset = dataset_name
-        ANALYZE_AND_PLOT.ext.dataset = dataset_name
-        STANDARDIZE_OUTPUTS.ext.dataset = dataset_name
-        DUPLICATE_HANDLE.ext.dataset = dataset_name
-        COMBINE_PHIDRA_TSV.ext.dataset = dataset_name
-        SPLIT_BY_GENOFEATURE.ext.dataset = dataset_name
-        phidra_only_summary.ext.dataset = dataset_name
-
-        // Clean headers for each dataset
-        def cleaned_fasta = CLEAN_FASTA_HEADERS(input_fasta)
-
-        def dataset_proteins = Channel.fromList(params.proteins)
-            .combine(cleaned_fasta.fasta)
-            .map { config, cleaned -> 
-                config + [input_fasta: cleaned]
-            }
-
-        // Process proteins for this dataset
-        PHIDRA(dataset_proteins)
-                .branch { protein, fasta, init_search, rec_search ->
-                    def name = protein.toLowerCase()
-                    annotation: name in ['polb', 'helicase']
-                    pasv: name in ['pola', 'rnr']
-                    phidra_only: true
-                }
-                .set { branched }
-
-        def ch_annotation = branched.annotation
-            .filter { it != null }
-            .map { protein, fasta, init_search, rec_search ->
-                tuple(protein, fasta, init_search, rec_search)
-            }
-            | annotate_top_hits
-            | map { protein, file -> file }
-
-        def ch_pasv_results = branched.pasv
-            .filter { it != null }
-            .map { protein, fasta, init_search, rec_search ->
-                def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
-                def align_refs = file(proteinConfig.pasv_align_refs)
-                tuple(protein, fasta, align_refs)
-            }
-            | PASV
-            | PASV_POST
-
-        def ch_phidra_only = branched.phidra_only
-            .filter { it != null }
-            .map { protein, fasta, init_search, rec_search ->
-                tuple(protein, fasta)
-            }
-            | phidra_only_summary
-            | map { protein, file -> file }
-
-        def ch_pasv_processed = ch_pasv_results
-            .map { protein, processed_file, stats, plot ->
-                // Return only the processed file for combining with annotation results
-                processed_file
-            }
-
-        def ch_combined_phidra_results = Channel.empty()
-            .mix(ch_annotation, ch_phidra_only)
-            .collect()
-            .map { files -> tuple('combined', files) }  
-            .view { "[DEBUG] Processing files: ${it[1]}" }
-            | COMBINE_PHIDRA_TSV
-
-        // Use the same channel output for both processes
-        ch_combined_phidra_results | ANALYZE_AND_PLOT
-
-        // Mix with PASV results and standardize
-        def ch_standardized_output = Channel.empty()
-            .mix(
-                ch_combined_phidra_results,
-                ch_pasv_processed
-            )
-            .collect()
-            .map { files -> 
-                def flattened = files.flatten()
-                println "[DEBUG] Files to standardize: ${flattened}"
-                tuple('combined', flattened) 
-            }
-            | STANDARDIZE_OUTPUTS
-
-        def ch_duplicated_output = ch_standardized_output
-            | DUPLICATE_HANDLE
-
-        def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-            ch_standardized_output,
-            CLEAN_FASTA_HEADERS.out.fasta
-        )
-    }
+    // Process each dataset through the pipeline
+    ch_datasets | PROCESS_DATASET
 }
 
 
+workflow PROCESS_DATASET {
+    take:
+        ch_dataset
+
+    main:
+        // Main workflow execution
+        CLEAN_FASTA_HEADERS(ch_dataset)
+        
+        // Create protein configs per dataset 
+        ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
+            .combine(Channel.fromList(params.proteins))
+            .map { meta, fasta, protein_config -> 
+                def new_meta = meta + [
+                    protein: protein_config.protein,
+                    pfamDomain: protein_config.pfamDomain,
+                    subjectDB: protein_config.subjectDB,
+                    pasv_align_refs: protein_config.containsKey('pasv_align_refs') ? 
+                        protein_config.pasv_align_refs : null
+                ]
+                tuple(new_meta, fasta)
+            }
+
+        PHIDRA(ch_dataset_proteins)
+
+        ch_branched = PHIDRA.out.results
+            .branch { meta, fasta, init_search, rec_search -> 
+                annotation: meta.protein.toLowerCase() in ['polb', 'helicase']
+                pasv: meta.protein.toLowerCase() in ['pola', 'rnr']
+                phidra_only: true
+            }
 
 
 
+        ch_pasv = ch_branched.pasv
+            .map { meta, fasta, init_search, rec_search ->
+                tuple(
+                    meta,
+                    fasta,
+                    meta.pasv_align_refs // align_refs is already in meta from earlier
+                )
+            }
+
+        ANNOTATE_HITS(ch_branched.annotation)
+        PASV(ch_pasv)
+        PASV_POST(PASV.out.results)
+        PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
+
+        ch_phidra_results = Channel.empty()
+            .mix(
+                ANNOTATE_HITS.out.results,
+                PHIDRA_ONLY_SUMMARY.out.results
+            )
+            .map { meta, file -> 
+                tuple(meta.id, meta, file)
+            }
+            .groupTuple(by: 0)
+            .map { id, metas, files ->
+                tuple(metas[0], files) 
+            }
+ 
+        COMBINE_PHIDRA_TSV(ch_phidra_results)
+        ANALYZE_AND_PLOT(COMBINE_PHIDRA_TSV.out.combined)
 
 
-
-
-
-
-    // ch_input_fasta = Channel.fromPath(params.input_fasta)
-    // // def ch_input = Channel.fromList(params.proteins)
-
-    // CLEAN_FASTA_HEADERS(ch_input_fasta)
-
-
-    // ch_proteins = Channel.fromList(params.proteins)
-    //     .combine(CLEAN_FASTA_HEADERS.out.fasta)
-    //     .map { config, cleaned_fasta -> 
-    //         // Add the cleaned fasta path to the config
-    //         config + [input_fasta: cleaned_fasta]
-    //     }
-
-    // PHIDRA(ch_proteins)
-    //     .branch { protein, fasta, init_search, rec_search ->
-    //         def name = protein.toLowerCase()
-    //         annotation: name in ['polb', 'helicase']
-    //         pasv: name in ['pola', 'rnr']
-    //         phidra_only: true
-    //     }
-    //     .set { branched }
-
-    // def ch_annotation = branched.annotation
-    //     .filter { it != null }
-    //     .map { protein, fasta, init_search, rec_search ->
-    //         tuple(protein, fasta, init_search, rec_search)
-    //     }
-    //     | annotate_top_hits
-    //     | map { protein, file -> file }
-
-    // def ch_pasv_results = branched.pasv
-    //     .filter { it != null }
-    //     .map { protein, fasta, init_search, rec_search ->
-    //         def proteinConfig = params.proteins.find { it.protein.toLowerCase() == protein.toLowerCase() }
-    //         def align_refs = file(proteinConfig.pasv_align_refs)
-    //         tuple(protein, fasta, align_refs)
-    //     }
-    //     | PASV
-    //     | PASV_POST
-
-    // def ch_phidra_only = branched.phidra_only
-    //     .filter { it != null }
-    //     .map { protein, fasta, init_search, rec_search ->
-    //         tuple(protein, fasta)
-    //     }
-    //     | phidra_only_summary
-    //     | map { protein, file -> file }
-
-    // def ch_pasv_processed = ch_pasv_results
-    //     .map { protein, processed_file, stats, plot ->
-    //         // Return only the processed file for combining with annotation results
-    //         processed_file
-    //     }
-
-    // def ch_combined_phidra_results = Channel.empty()
-    //     .mix(ch_annotation, ch_phidra_only)
-    //     .collect()
-    //     .map { files -> tuple('combined', files) }  
-    //     .view { "[DEBUG] Processing files: ${it[1]}" }
-    //     | COMBINE_PHIDRA_TSV
-
-    // // Use the same channel output for both processes
-    // ch_combined_phidra_results | ANALYZE_AND_PLOT
-
-    // // Mix with PASV results and standardize
-    // def ch_standardized_output = Channel.empty()
-    //     .mix(
-    //         ch_combined_phidra_results,
-    //         ch_pasv_processed
-    //     )
-    //     .collect()
-    //     .map { files -> 
-    //         def flattened = files.flatten()
-    //         println "[DEBUG] Files to standardize: ${flattened}"
-    //         tuple('combined', flattened) 
-    //     }
-    //     | STANDARDIZE_OUTPUTS
-
-    // def ch_duplicated_output = ch_standardized_output
-    //     | DUPLICATE_HANDLE
-
-    // def ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-    //     ch_standardized_output,
-    //     CLEAN_FASTA_HEADERS.out.fasta
-    // )
+        ch_pasv_map = PASV_POST.out
+            .map { meta, processed_file, stats_file, plot_file ->
+                tuple(meta, processed_file)
+            }
+        
+        ch_standardized_output = Channel.empty()
+            .mix(
+                COMBINE_PHIDRA_TSV.out,
+                ch_pasv_map
+            )
+            .map { meta, file -> 
+                tuple(meta.id, meta, file)
+            }
+            .groupTuple(by: 0)
+            .map { id, metas, files ->
+                tuple(metas[0], files) 
+            }
+        STANDARDIZE_OUTPUTS(ch_standardized_output)
+}
