@@ -312,172 +312,129 @@ process PASV_POST {
         pattern: "*.{tsv,png}"
 
     input:
-    tuple val(meta), file(pasv_file)
+        tuple val(meta), path(pasv_file)
 
     output:
-    tuple val(meta), 
-        file("${meta.protein}_processed.tsv"),
-        file("${meta.protein}_signature_stats.tsv"),
-        file("${meta.protein}_signature_distribution.png")
+        tuple val(meta),
+              path("${meta.protein}_processed.tsv"),
+              path("${meta.protein}_signature_stats.tsv"),
+              path("${meta.protein}_signature_distribution.png"),
+              emit: results
 
     script:
     """
-#!/usr/bin/env python
-import pandas as pd
-import matplotlib.pyplot as plt
-import sys
+    #!/usr/bin/env python3
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
 
-def pasv_post(file, protein):
-    df = pd.read_csv(file, sep='\t')
+    # Read and process the PASV file
+    print(f"Processing PASV file for ${meta.protein}")
+    df = pd.read_csv("${pasv_file}", sep='\\t')
+    print(f"Initial data shape: {df.shape}")
 
-    gapless = df[~df['signature'].str.contains('-')].copy()
+    # Remove signatures with gaps
+    processed_df = df[~df['signature'].str.contains('-')].copy()
+    print(f"After removing gaps: {processed_df.shape}")
 
+    # Calculate ORF length
+    processed_df['orf_length'] = processed_df['name'].apply(
+        lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
+    )
 
-    gapless['orf_length'] = gapless['name'].apply(lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3)
+    # Create span classes based on spans_start and spans_end columns
+    processed_df['span_class'] = processed_df.apply(
+        lambda row: 'both' if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
+                   else 'start' if row['spans_start'] == 'Yes'
+                   else 'end' if row['spans_end'] == 'Yes'
+                   else 'neither',
+        axis=1
+    )
 
-
-    def classify_span(s):
-        s = s.lower()
-        if 'both' in s:
-            return 'both'
-        elif 'start' in s:
-            return 'start'
-        elif 'end' in s:
-            return 'end'
-        elif 'neither' in s:
-            return 'neither'
-        return 'unknown'
-
-    gapless['span_class'] = gapless['spans'].apply(classify_span)
-    tally = gapless.groupby(['signature', 'span_class']).size().reset_index(name='count')
-
-    # Generate signature statistics
-    sig_stats = gapless.groupby('signature').agg({
-        'orf_length': ['count', 'mean']
+    # Generate statistics
+    stats = processed_df.groupby(['signature', 'span_class']).agg({
+        'orf_length': ['count', 'mean', 'std', 'min', 'max']
     }).reset_index()
-    sig_stats.columns = ['signature', 'count', 'mean_length']
-    sig_stats['protein'] = protein
-        
-    return gapless, tally, sig_stats
+    stats.columns = ['signature', 'span_class', 'count', 'mean_length', 'std_length', 'min_length', 'max_length']
+    
+    # Sort signatures by count for better visualization
+    signature_order = stats.groupby('signature')['count'].sum().sort_values(ascending=True).index
 
-
-def boxplots(df, tally, output_file, protein):
-    span_classes = sorted(df['span_class'].unique())
-    sig_counts = [
-        tally[tally['span_class'] == span_class]['signature'].nunique()
-        for span_class in span_classes
-    ]
+    # Create visualization
+    span_classes = sorted(processed_df['span_class'].unique())
+    n_signatures = len(signature_order)
     
-    # Calculate statistics for TSV while making plot
-    stats_data = []
-    
-    for span_class in span_classes:
-        sub = df[df['span_class'] == span_class]
-        sub_tally = (
-            tally[tally['span_class'] == span_class]
-            .sort_values(by='count', ascending=True)
-        )
-        
-        for sig in sub_tally['signature'].tolist():
-            values = sub[sub['signature'] == sig]['orf_length']
-            count = sub_tally[sub_tally['signature'] == sig]['count'].values[0]
-            mean_val = round(values.mean())
-            min_val = values.min()
-            max_val = values.max()
-            
-            stats_data.append({
-                'protein': protein,
-                'signature': sig,
-                'span_class': span_class,
-                'count': count,
-                'mean_length': mean_val,
-                'min_length': min_val,
-                'max_length': max_val
-            })
-    
-    # Create and save statistics DataFrame
-    stats_df = pd.DataFrame(stats_data)
-    stats_df.to_csv(output_file.replace('_distribution.png', '_stats.tsv'), 
-                    sep='\t', index=False)
-    
-    # Create plot with existing code
+    # Set figure dimensions
     height_per_sig = 0.4
-    fig_height = max(8, max(sig_counts) * height_per_sig)
-    fig_width = len(span_classes) * 6
+    fig_height = max(8, n_signatures * height_per_sig)
+    fig_width = len(span_classes) * 12
     
-    fig, axes = plt.subplots(nrows=1, ncols=len(span_classes), 
-                            figsize=(fig_width, fig_height), sharey=True)
-
+    # Create figure
+    fig, axes = plt.subplots(1, len(span_classes), 
+                            figsize=(fig_width, fig_height),
+                            sharey=True)
+    
     if len(span_classes) == 1:
         axes = [axes]
     
-    for i, span_class in enumerate(span_classes):
-        ax = axes[i] 
-        sub = df[df['span_class'] == span_class]
-
-        sub_tally = (
-            tally[tally['span_class'] == span_class]
-            .sort_values(by='count', ascending=True)  # Changed to True for bottom-to-top ordering
-        )
-        signature_sort = sub_tally['signature'].tolist()
-        data = [sub[sub['signature'] == sig]['orf_length'] for sig in signature_sort]
+    print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
+    
+    # Plot for each span class
+    for i, span in enumerate(span_classes):
+        ax = axes[i]
+        span_data = processed_df[processed_df['span_class'] == span]
         
-        # Create horizontal boxplot
-        bp = ax.boxplot(data, positions=range(len(signature_sort)), 
-                       vert=False,  # Make boxplot horizontal
-                       patch_artist=True)  # Fill boxes with color
-        
-        # Set y-axis labels (signatures)
-        ax.set_yticks(range(len(signature_sort)))
-        ax.set_yticklabels(signature_sort)
-        
-        # Add counts and means
-        for j, sig in enumerate(signature_sort):
-            values = sub[sub['signature'] == sig]['orf_length']
-            count = sub_tally[sub_tally['signature'] == sig]['count'].values
-            mean_val = round(values.mean())
+        if not span_data.empty:
+            # Create boxplot
+            sns.boxplot(data=span_data,
+                       x='orf_length',
+                       y='signature',
+                       order=signature_order,
+                       orient='h',
+                       ax=ax)
             
-            # Add count annotation
-            ax.annotate(f"N={count[0] if len(count) > 0 else 0}",
-                xy=(values.min(), j),  # Place at start of boxplot
-                xytext=(-10, 0),  # Offset to the left
-                textcoords='offset points',
-                ha='right', va='center',
-                fontsize=9, color='blue')
-            
-            # Add mean annotation
-            ax.annotate(f"Mean={mean_val}",
-                xy=(values.max(), j),  # Place at end of boxplot
-                xytext=(10, 0),  # Offset to the right
-                textcoords='offset points',
-                ha='left', va='center',
-                fontsize=9, color='green')
+            # Add statistics
+            span_stats = stats[stats['span_class'] == span]
+            for idx, sig in enumerate(signature_order):
+                sig_stats = span_stats[span_stats['signature'] == sig]
+                if not sig_stats.empty:
+                    # Add count
+                    ax.text(ax.get_xlim()[0], idx, 
+                           f"n={int(sig_stats['count'].iloc[0])}",
+                           ha='right', va='center',
+                           fontsize=8, color='blue')
+                    
+                    # Add mean
+                    if sig_stats['count'].iloc[0] > 0:
+                        ax.text(ax.get_xlim()[1], idx,
+                               f"μ={sig_stats['mean_length'].iloc[0]:.1f}",
+                               ha='left', va='center',
+                               fontsize=8, color='green')
         
-        # Customize appearance
-        ax.set_title(f"Span: {span_class}")
+        ax.set_title(f"Span: {span}")
         ax.set_xlabel("ORF Length (aa)")
-        ax.grid(True, axis='x', linestyle='--', alpha=0.7)
-
+        ax.grid(True, alpha=0.3)
+        
+        # Ensure y-labels are readable
+        ax.tick_params(axis='y', labelsize=8, pad=40)
+    
     # Adjust layout
-    fig.suptitle(f"Signature Distribution of {protein}", fontsize=16, y=1.02)
-    plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight', dpi=300)
+    plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
+    fig.suptitle(f"${meta.protein} Signature Distribution", fontsize=16, y=1.02)
+    
+    # Save outputs
+    processed_df.to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
+    stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
+    plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
     plt.close()
 
-
-# Process the PASV file
-protein = "${meta.protein}"
-processed_df, tally, sig_stats = pasv_post("${pasv_file}", protein)
-
-# Save processed results
-processed_df.to_csv(f"{protein}_processed.tsv", sep='\\t', index=False)
-sig_stats.to_csv(f"{protein}_signature_stats.tsv", sep='\\t', index=False)
-
-# Generate plots
-boxplots(processed_df, tally, f"{protein}_signature_distribution.png", protein)
-
-print(f"\\nSignature Statistics Summary for {protein}:")
-print(sig_stats.sort_values('count', ascending=False))
+    # Print summary
+    print("\\nAnalysis Summary:")
+    print(f"Total sequences analyzed: {len(processed_df)}")
+    print(f"Unique signatures: {len(signature_order)}")
+    print(f"Span classes: {span_classes}")
+    print("\\nSignature counts by span class:")
+    print(stats.groupby(['span_class', 'signature'])['count'].sum().unstack())
     """
 }
 
@@ -910,6 +867,7 @@ workflow PROCESS_DATASET {
 
         ANNOTATE_HITS(ch_branched.annotation)
         PASV(ch_pasv)
+
         PASV_POST(PASV.out.results)
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
 
