@@ -844,13 +844,6 @@ process SPLIT_BY_GENOFEATURE {
             # Write matching sequences to FASTA
             if matching_seqs:
                 SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
-            
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        python: \$(python --version | sed 's/Python //')
-        biopython: \$(python -c "import Bio; print(Bio.__version__)")
-        pandas: \$(python -c "import pandas; print(pandas.__version__)")
-    END_VERSIONS
     """
 }
 
@@ -942,7 +935,7 @@ workflow PROCESS_DATASET {
                 tuple(meta, processed_file)
             }
         
-        ch_standardized_output = Channel.empty()
+        ch_files_to_standardize = Channel.empty()
             .mix(
                 COMBINE_PHIDRA_TSV.out,
                 ch_pasv_map
@@ -954,5 +947,12 @@ workflow PROCESS_DATASET {
             .map { id, metas, files ->
                 tuple(metas[0], files) 
             }
-        STANDARDIZE_OUTPUTS(ch_standardized_output)
+        STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+
+        DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
+
+        ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+            STANDARDIZE_OUTPUTS.out,
+            CLEAN_FASTA_HEADERS.out.fasta
+        )
 }
