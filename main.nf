@@ -391,8 +391,9 @@ process PASV_POST {
                        y='signature',
                        order=signature_order,
                        orient='h',
-                       ax=ax)
-            
+                       ax=ax,
+                       color='skyblue')
+
             # Add statistics
             span_stats = stats[stats['span_class'] == span]
             for idx, sig in enumerate(signature_order):
@@ -429,12 +430,6 @@ process PASV_POST {
     plt.close()
 
     # Print summary
-    print("\\nAnalysis Summary:")
-    print(f"Total sequences analyzed: {len(processed_df)}")
-    print(f"Unique signatures: {len(signature_order)}")
-    print(f"Span classes: {span_classes}")
-    print("\\nSignature counts by span class:")
-    print(stats.groupby(['span_class', 'signature'])['count'].sum().unstack())
     """
 }
 
@@ -487,13 +482,14 @@ process STANDARDIZE_OUTPUTS {
                 'orf_id': df['name'],
                 'identified': 'PASV',
                 'genofeature': df['signature'],
-                'protein': protein
+                'protein': protein,
+                'dataset': '${meta.id}'
             })
             print(f"Converted {len(standardized)} PASV entries")
             dfs.append(standardized)
         else:
             # Verify standard format
-            standard_columns = ['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']
+            standard_columns = ['genome_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
             if all(col in df.columns for col in standard_columns):
                 print(f"Adding standard format file: {tsv_file}")
                 dfs.append(df)
@@ -512,11 +508,9 @@ process STANDARDIZE_OUTPUTS {
         print(f"Created combined file with {len(combined)} total rows")
     else:
         print("No data to combine")
-        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_results.tsv", sep='\\t', index=False)
+        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_results.tsv", sep='\\t', index=False)
     """
 }
-
-
 
 
 process PHIDRA_ONLY_SUMMARY {
@@ -828,7 +822,7 @@ workflow PROCESS_DATASET {
         ch_dataset
 
     main:
-        // Main workflow execution
+        // // Main workflow execution
         CLEAN_FASTA_HEADERS(ch_dataset)
         
         // Create protein configs per dataset 
@@ -905,6 +899,8 @@ workflow PROCESS_DATASET {
             .map { id, metas, files ->
                 tuple(metas[0], files) 
             }
+            .view()
+
         STANDARDIZE_OUTPUTS(ch_files_to_standardize)
 
         DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
