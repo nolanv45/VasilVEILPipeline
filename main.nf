@@ -64,6 +64,12 @@ process PHIDRA {
         -o \$WORK_DIR \\
         -t ${task.cpus}
 
+    if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
+        mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
+        echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
+            "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
+    fi
+
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version | sed 's/Python //')
@@ -706,7 +712,7 @@ process COMBINE_PHIDRA_TSV {
         mode: 'copy'
 
     input:
-    tuple val(meta), path('*.tsv')
+    tuple val(meta), path(tsv_files)
 
     output:
         tuple val(meta), path('combined_phidra_output.tsv'), emit: combined
@@ -715,34 +721,31 @@ process COMBINE_PHIDRA_TSV {
     """
     #!/usr/bin/env python3
     import pandas as pd
-    import glob
     import os
 
-    print("Debug: Current directory contents:")
-    print(os.listdir('.'))
-
-    # Get list of input files
-    tsv_files = glob.glob('*.tsv')
-    print(f"Processing TSV files: {tsv_files}")
+    tsv_files = "${tsv_files}".split()  // Convert space-separated string to list
+    print(f"Processing {len(tsv_files)} TSV files")
 
     dfs = []
     for tsv_file in tsv_files:
         if os.path.exists(tsv_file):
             print(f"Reading file: {tsv_file}")
-            df = pd.read_csv(tsv_file, sep='\\t')
-            dfs.append(df)
-            print(f"Added {len(df)} rows from {tsv_file}")
+            try:
+                df = pd.read_csv(tsv_file, sep='\\t')
+                dfs.append(df)
+                print(f"Added {len(df)} rows from {tsv_file}")
+            except Exception as e:
+                print(f"Error reading {tsv_file}: {str(e)}")
         else:
             print(f"Warning: File not found: {tsv_file}")
 
     if dfs:
-        # Combine all DataFrames into one
         combined = pd.concat(dfs, ignore_index=True)
+        print(f"Combined DataFrame has {len(combined)} rows")
         combined.to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
-        print(f"Debug: Written combined file with {len(combined)} total rows")
     else:
-        print("Warning: No data to combine")
-        pd.DataFrame().to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
+        print("No data to combine, creating empty output")
+        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
     """
 }
 
@@ -822,10 +825,8 @@ workflow PROCESS_DATASET {
         ch_dataset
 
     main:
-        // // Main workflow execution
         CLEAN_FASTA_HEADERS(ch_dataset)
-        
-        // Create protein configs per dataset 
+         
         ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
             .combine(Channel.fromList(params.proteins))
             .map { meta, fasta, protein_config -> 
@@ -865,11 +866,12 @@ workflow PROCESS_DATASET {
         PASV_POST(PASV.out.results)
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
 
-        ch_phidra_results = Channel.empty()
-            .mix(
-                ANNOTATE_HITS.out.results,
-                PHIDRA_ONLY_SUMMARY.out.results
-            )
+        ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
+        ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
+
+        // Combine channels
+        ch_phidra_results = ch_annotate
+            .mix(ch_phidra_only)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }
@@ -877,8 +879,9 @@ workflow PROCESS_DATASET {
             .map { id, metas, files ->
                 tuple(metas[0], files) 
             }
- 
+
         COMBINE_PHIDRA_TSV(ch_phidra_results)
+
         ANALYZE_AND_PLOT(COMBINE_PHIDRA_TSV.out.combined)
 
 
@@ -887,11 +890,17 @@ workflow PROCESS_DATASET {
                 tuple(meta, processed_file)
             }
         
+
+
         ch_files_to_standardize = Channel.empty()
-            .mix(
-                COMBINE_PHIDRA_TSV.out,
-                ch_pasv_map
-            )
+        if (COMBINE_PHIDRA_TSV.out.combined) {
+            ch_files_to_standardize = ch_files_to_standardize.mix(COMBINE_PHIDRA_TSV.out.combined)
+        }
+        if (ch_pasv_map) {
+            ch_files_to_standardize = ch_files_to_standardize.mix(ch_pasv_map)
+        }
+
+        ch_files_to_standardize = ch_files_to_standardize
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }

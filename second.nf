@@ -949,36 +949,36 @@ workflow {
 
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
-    // ch_embeddings = EMBEDDINGS(
-    //     ch_embedding_datasets
-    // )
+    ch_embeddings = EMBEDDINGS(
+        ch_embedding_datasets
+    )
 
-    // ch_coordinates = GENERATE_COORDINATES(
-    //     ch_embeddings,
-    //     // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings",
-    //     ch_filtered_tsv
-    // )
+    ch_coordinates = GENERATE_COORDINATES(
+        ch_embeddings,
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings",
+        ch_filtered_tsv
+    )
 
-    // ch_module_file = MODULE_FILE(
-    //     ch_filtered_tsv,
-    //     ch_metadata
-    // )
+    ch_module_file = MODULE_FILE(
+        ch_filtered_tsv,
+        ch_metadata
+    )
 
     // remember to fix the input from coordinates the same way you did to pasv output.
-    // ch_umap = UMAP_PROJECTION(
-    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-    //     // ch_coordinates,
-    //     ch_filtered_tsv,
-    //     ch_metadata
-    // )
+    ch_umap = UMAP_PROJECTION(
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata
+    )
 
     ch_hbd = HDBSCAN(
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        // ch_coordinates,
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
+        ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,
-        // ch_umap.plots
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
+        ch_umap.plots
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
         
     )
 }
