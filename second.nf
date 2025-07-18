@@ -766,7 +766,6 @@ process GENERATE_COORDINATES {
     
     input:
         path(embeddings)   
-        path(filtered_tsv)
         
     output:
         path "*", emit: coordinates_files
@@ -910,6 +909,9 @@ process MODULE_FILE {
     script:
     """
     #!/usr/bin/env python3
+# will take tsv files that output from each dataset per orf basis.
+# will filter genofeatures based on metadata file only, so user input required
+
 import pandas as pd
 import glob
 import os
@@ -919,18 +921,18 @@ metadata = pd.read_csv("${metadata_file}", sep='\t')
 genofeatures = metadata['genofeature'].unique()
 
 df = df[df['genofeature'].isin(genofeatures)]
-contig_df = pd.DataFrame({'genome_id': df['genome_id'].unique()})
+contig_df = pd.DataFrame({'contig_id': df['contig_id'].unique()})
 
 for genofeature in genofeatures:
     feature_data = df[df['genofeature'] == genofeature]
     if len(feature_data) > 0:
-        feature_orfs = feature_data.set_index('genome_id')['orf_id']
-        contig_df[genofeature] = contig_df['genome_id'].map(
-            feature_orfs.groupby('genome_id').first()
+        feature_orfs = feature_data.set_index('contig_id')['orf_id']
+        contig_df[genofeature] = contig_df['contig_id'].map(
+            feature_orfs.groupby('contig_id').first()
         )
     else:
         contig_df[genofeature] = None
-genofeature_columns = [col for col in contig_df.columns if col != 'genome_id']
+genofeature_columns = [col for col in contig_df.columns if col != 'contig_id']
 contig_df['module'] = contig_df[genofeature_columns].apply(
     lambda row: '_'.join([col for col, val in zip(genofeature_columns, row) if pd.notna(val)]), 
     axis=1
@@ -953,32 +955,31 @@ workflow {
         ch_embedding_datasets
     )
 
-    ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings,
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings",
-        ch_filtered_tsv
-    )
+    // ch_coordinates = GENERATE_COORDINATES(
+    //     ch_embeddings,
+    //     // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings",
+    // )
 
-    ch_module_file = MODULE_FILE(
-        ch_filtered_tsv,
-        ch_metadata
-    )
+    // ch_module_file = MODULE_FILE(
+    //     ch_filtered_tsv,
+    //     ch_metadata
+    // )
 
-    // remember to fix the input from coordinates the same way you did to pasv output.
-    ch_umap = UMAP_PROJECTION(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata
-    )
+    // // remember to fix the input from coordinates the same way you did to pasv output.
+    // ch_umap = UMAP_PROJECTION(
+    //     // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
+    //     ch_coordinates,
+    //     ch_filtered_tsv,
+    //     ch_metadata
+    // )
 
-    ch_hbd = HDBSCAN(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata,
-        ch_umap.plots
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
+    // ch_hbd = HDBSCAN(
+    //     // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
+    //     ch_coordinates,
+    //     ch_filtered_tsv,
+    //     ch_metadata,
+    //     ch_umap.plots
+    //     // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
         
-    )
+    // )
 }

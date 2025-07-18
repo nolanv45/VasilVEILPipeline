@@ -14,6 +14,7 @@ process MODIFY_CLUSTERS {
 
     script:
     """
+#!/usr/bin/env python3
 import os
 import pandas as pd
 
@@ -21,12 +22,11 @@ import pandas as pd
 # Alicia Holk aholk@udel.edu
 
 #nn 100 and clusters 30 and 10
+print()
 
 # Hardcoded paths and parameters
-input_dir = "${cluster_csv_dir}"
-file1 = os.path.join(input_dir, "hdbscan_nn100_umapmd7_md0_minclust30_clusters.csv")
-file2 = os.path.join(input_dir, "hdbscan_nn100_umapmd7_md0_minclust10_clusters.csv")
-
+file1 = os.path.join("${cluster_csv_dir}", "hdbscan_nn100_md7_minclust30_clusters.csv")
+file2 = os.path.join("${cluster_csv_dir}", "hdbscan_nn100_md7_minclust10_clusters.csv")
 
 # Create a dataframe from each file
 df1 = pd.read_csv(file1, sep=",", header=0)
@@ -133,7 +133,7 @@ umap_md = 0.7
 input_dir = "${embeddings_dir}"  # Updated to filtered embeddings directory
 coords_dir = "${coordinates_dir}"  # Directory with saved coordinates from 04a
 metadata_file = "${metadata_file}"  # Metadata file with colors/markers
-output_dir = "${output_dir}"  # Output directory for UMAP plots
+output_dir = "${params.outdir}"  # Output directory for UMAP plots
 os.makedirs(output_dir, exist_ok=True)
 
 
@@ -301,7 +301,7 @@ def plot_umap_with_metadata(embedding_ids, umap_nn, umap_md, cluster_df, output_
 
 if __name__ == "__main__":
     # Load cluster labels
-    cluster_df = load_cluster_metadata(metadata_file)
+    cluster_df = load_cluster_metadata(meta)
     cluster_df.to_csv(os.path.join(output_dir, "hdbscan_modified_cluster_labels_no_duplicates.tsv"), sep="\t", index=False, header=True)
     
     # Load embedding IDs only (we don't need full embeddings since we're using coordinates from 04a)
@@ -313,677 +313,680 @@ if __name__ == "__main__":
         plot_umap_with_metadata(embedding_ids, umap_nn, umap_md, cluster_df, output_file, coords_dir)
     else:
         print("No valid embeddings found.")
+
+
+
+
+
+# Main execution
+print("Loading metadata...")
+module_df = pd.read_csv("${filtered_tsv}", sep='\\t')
+metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
+display_names = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
+
+# Generate plots for specified parameters
+legend_handles = None
+for nn in [75, 100, 125]:
+    for md in [0, 0.3, 0.5, 0.7]:
+        output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
+        handles = plot_umap(module_df, nn, md, output_file, display_names)
+        if legend_handles is None:
+            legend_handles = handles
     """
 }
 
-process 05d {
-    publishDir "${params.outdir}/umap_cluster",
-        mode: 'copy'
+// process 05d {
+//     publishDir "${params.outdir}/umap_cluster",
+//         mode: 'copy'
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+//     conda "/home/nolanv/.conda/envs/esm-umap"
     
-    input:
-        path coordinates_dir  // Directory containing the pre-generated coordinates
-        path filtered_tsv    // TSV file with metadata
-        path metadata_file   // Metadata file with colors/markers
+//     input:
+//         path coordinates_dir  // Directory containing the pre-generated coordinates
+//         path filtered_tsv    // TSV file with metadata
+//         path metadata_file   // Metadata file with colors/markers
         
-    output:
-        path "plots/*.{png,svg}"
+//     output:
+//         path "plots/*.{png,svg}"
 
-    script:
-    """
-import os
-import torch    
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
-from collections import defaultdict
-import random  
+//     script:
+//     """
+// import os
+// import torch    
+// import numpy as np
+// import matplotlib.pyplot as plt
+// import pandas as pd
+// import matplotlib.patches as mpatches
+// import matplotlib.lines as mlines
+// from collections import defaultdict
+// import random  
 
-#---------v_25_06_25------------------------------------
-# UPDATED: This script now loads UMAP coordinates from 04a script instead of recalculating them
-# This ensures consistency and efficiency across all downstream scripts
-# UMAP coordinates are loaded from files saved by 04a_umap_filter_25_06_25.py
+// #---------v_25_06_25------------------------------------
+// # UPDATED: This script now loads UMAP coordinates from 04a script instead of recalculating them
+// # This ensures consistency and efficiency across all downstream scripts
+// # UMAP coordinates are loaded from files saved by 04a_umap_filter_25_06_25.py
 
-#--------- v_25_06_19-------------
-# saves umap coordinates and order of embedding ids
-# puts edges behind nodes in network plot (z-order=1)
-# added script from Zach to plot more consistently
-# sections updated include SET SEED and Perform UMAP 
+// #--------- v_25_06_19-------------
+// # saves umap coordinates and order of embedding ids
+// # puts edges behind nodes in network plot (z-order=1)
+// # added script from Zach to plot more consistently
+// # sections updated include SET SEED and Perform UMAP 
 
-# output directory name is now "05d_umap_network" instead of "05d_umap_network_v4run"
-# Alicia Holk aholk@udel.edu
-# ----------------------------------------------------
+// # output directory name is now "05d_umap_network" instead of "05d_umap_network_v4run"
+// # Alicia Holk aholk@udel.edu
+// # ----------------------------------------------------
 
-# SET SEED for packages to default all randomization (Include at start of script)
-os.environ['PYTHONHASHSEED'] = '42'
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+// # SET SEED for packages to default all randomization (Include at start of script)
+// os.environ['PYTHONHASHSEED'] = '42'
+// random.seed(42)
+// np.random.seed(42)
+// torch.manual_seed(42)
+// if torch.cuda.is_available():
+//     torch.cuda.manual_seed(42)
+//     torch.cuda.manual_seed_all(42)
+//     torch.backends.cudnn.deterministic = True
+//     torch.backends.cudnn.benchmark = False
 
-# Define parameter ranges
-n_neighbors_list = [100]
-min_dist_list = [0.7]
+// # Define parameter ranges
+// n_neighbors_list = [100]
+// min_dist_list = [0.7]
 
-# Hardcoded paths and parameters
-input_dir = "/mnt/VEIL/users/aholk/ENA_2025/03c_embeddings/"  
-module_file = "/mnt/VEIL/users/aholk/ENA_2025/02e_orf_ctg_summary/orf_df.tsv"
-metadata_file = "/mnt/VEIL/users/aholk/ENA_2025/bin/protein_metadata_all.txt"
-column_name = "genofeature"
-coords_dir = "/mnt/VEIL/users/aholk/ENA_2025/04a_umap"  # Directory containing UMAP coordinates from 04a
+// # Hardcoded paths and parameters
+// input_dir = "/mnt/VEIL/users/aholk/ENA_2025/03c_embeddings/"  
+// module_file = "/mnt/VEIL/users/aholk/ENA_2025/02e_orf_ctg_summary/orf_df.tsv"
+// metadata_file = "/mnt/VEIL/users/aholk/ENA_2025/bin/protein_metadata_all.txt"
+// column_name = "genofeature"
+// coords_dir = "/mnt/VEIL/users/aholk/ENA_2025/04a_umap"  # Directory containing UMAP coordinates from 04a
 
-output_dir = "/mnt/VEIL/users/aholk/ENA_2025/05d_umap_network"
-os.makedirs(output_dir, exist_ok=True)
+// output_dir = "/mnt/VEIL/users/aholk/ENA_2025/05d_umap_network"
+// os.makedirs(output_dir, exist_ok=True)
 
-def parse_embedding_id(embedding_id): #taking orf ID and returning the contig ID
-    parts = embedding_id.split('_')
-    if len(parts) >= 3:
-        return '_'.join(parts[:-3])
-    return embedding_id
+// def parse_embedding_id(embedding_id): #taking orf ID and returning the contig ID
+//     parts = embedding_id.split('_')
+//     if len(parts) >= 3:
+//         return '_'.join(parts[:-3])
+//     return embedding_id
 
-def load_embedding(file_path):
-    """Loads embeddings from a .pt file."""
-    try:
-        embedding_data = torch.load(file_path)
-        embedding = embedding_data["mean_representations"][36].numpy()
-        embedding_id = embedding_data.get("label")
-        if embedding_id is None:
-            raise ValueError(f"Embedding ID not found in file: {os.path.basename(file_path)}")
-        return embedding, embedding_id
-    except Exception as e:
-        print(f"Error processing file {file_path}: {e}")
-        return None, None
+// def load_embedding(file_path):
+//     try:
+//         embedding_data = torch.load(file_path)
+//         embedding = embedding_data["mean_representations"][36].numpy()
+//         embedding_id = embedding_data.get("label")
+//         if embedding_id is None:
+//             raise ValueError(f"Embedding ID not found in file: {os.path.basename(file_path)}")
+//         return embedding, embedding_id
+//     except Exception as e:
+//         print(f"Error processing file {file_path}: {e}")
+//         return None, None
 
-def load_module(module_file):
-    """Loads module data from a TSV file."""
-    try:
-        module_df = pd.read_csv(module_file, sep='\t')
-        module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
-        return module_df
-    except Exception as e:
-        print(f"Error loading module file: {e}")
-        return None
+// def load_module(module_file):
+//     try:
+//         module_df = pd.read_csv(module_file, sep='\t')
+//         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
+//         return module_df
+//     except Exception as e:
+//         print(f"Error loading module file: {e}")
+//         return None
 
 
-def load_metadata(metadata_file):
-    """Loads metadata (including colors and shapes) from a file into dictionaries."""
-    try:
-        metadata_df = pd.read_csv(metadata_file, sep="\t")  # Ensure tab-delimited format
-        # print(metadata_df.head())
-        color_map = dict(zip(metadata_df["genofeature"], metadata_df["color"]))  # Feature → Color
-        display_map = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))  # Feature → Display Name
-        marker_map = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))  # Feature → Marker Shape
-        return color_map, display_map, marker_map
-    except Exception as e:
-        print(f"Error loading metadata file: {e}")
-        return {}, {}, {}
+// def load_metadata(metadata_file):
+//     try:
+//         metadata_df = pd.read_csv(metadata_file, sep="\t")  # Ensure tab-delimited format
+//         # print(metadata_df.head())
+//         color_map = dict(zip(metadata_df["genofeature"], metadata_df["color"]))  # Feature → Color
+//         display_map = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))  # Feature → Display Name
+//         marker_map = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))  # Feature → Marker Shape
+//         return color_map, display_map, marker_map
+//     except Exception as e:
+//         print(f"Error loading metadata file: {e}")
+//         return {}, {}, {}
 
-def load_all_embedding_ids(base_dir, subdirs=None):
-    """
-    Recursively loads embedding IDs from .pt files in the specified subdirectories.
-    Only loads IDs, not the actual embeddings.
+// def load_all_embedding_ids(base_dir, subdirs=None):
+//     embedding_ids = []
 
-    Parameters:
-        base_dir (str): The root directory containing subdirectories with .pt files.
-        subdirs (list, optional): A list of subdirectories to process. If None, all subdirectories are processed.
+//     # If subdirs is None, scan all subdirectories
+//     if subdirs is None:
+//         subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
 
-    Returns:
-        list: A list of embedding IDs.
-    """
-    embedding_ids = []
+//     for subdir in subdirs:
+//         subdir_path = os.path.join(base_dir, subdir)
+//         if not os.path.isdir(subdir_path):
+//             print(f"Skipping {subdir_path}, not a valid directory")
+//             continue
 
-    # If subdirs is None, scan all subdirectories
-    if subdirs is None:
-        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+//         # Recursively search for .pt files
+//         for root, _, files in os.walk(subdir_path):  # Walk through all levels
+//             for file_name in files:
+//                 if file_name.endswith(".pt"):
+//                     file_path = os.path.join(root, file_name)
+//                     embedding, embedding_id = load_embedding(file_path)
+//                     if embedding_id is not None:
+//                         embedding_ids.append(embedding_id)
 
-    for subdir in subdirs:
-        subdir_path = os.path.join(base_dir, subdir)
-        if not os.path.isdir(subdir_path):
-            print(f"Skipping {subdir_path}, not a valid directory")
-            continue
-
-        # Recursively search for .pt files
-        for root, _, files in os.walk(subdir_path):  # Walk through all levels
-            for file_name in files:
-                if file_name.endswith(".pt"):
-                    file_path = os.path.join(root, file_name)
-                    embedding, embedding_id = load_embedding(file_path)
-                    if embedding_id is not None:
-                        embedding_ids.append(embedding_id)
-
-    return embedding_ids
+//     return embedding_ids
 
 
-def plot_umap(embedding_ids, module_df, nn, md, output_file, display_names):
-    """Plots UMAP embedding with colors mapped from metadata using coordinates from 04a and saves legend as separate image."""
+// def plot_umap(embedding_ids, module_df, nn, md, output_file, display_names):
+//     # Load UMAP coordinates from 04a
+//     md_int = int(md * 10)  # Convert min_dist to integer for filename
+//     coord_file = os.path.join(coords_dir, f"embedding_2d_nn{nn}_md{md_int}.npy")
+//     coord_ids_file = os.path.join(coords_dir, f"embedding_ids_nn{nn}_md{md_int}.txt")
     
-    # Load UMAP coordinates from 04a
-    md_int = int(md * 10)  # Convert min_dist to integer for filename
-    coord_file = os.path.join(coords_dir, f"embedding_2d_nn{nn}_md{md_int}.npy")
-    coord_ids_file = os.path.join(coords_dir, f"embedding_ids_nn{nn}_md{md_int}.txt")
-    
-    try:
-        # Load coordinates and IDs from 04a
-        embedding_2d = np.load(coord_file)
-        with open(coord_ids_file, 'r') as f:
-            coord_embedding_ids = [line.strip() for line in f]
+//     try:
+//         # Load coordinates and IDs from 04a
+//         embedding_2d = np.load(coord_file)
+//         with open(coord_ids_file, 'r') as f:
+//             coord_embedding_ids = [line.strip() for line in f]
         
-        print(f"Loaded UMAP coordinates from {coord_file}")
-        print(f"Coordinate shape: {embedding_2d.shape}")
-        print(f"Number of coordinate IDs: {len(coord_embedding_ids)}")
+//         print(f"Loaded UMAP coordinates from {coord_file}")
+//         print(f"Coordinate shape: {embedding_2d.shape}")
+//         print(f"Number of coordinate IDs: {len(coord_embedding_ids)}")
         
-    except FileNotFoundError as e:
-        print(f"Error: Could not find coordinate files from 04a: {e}")
-        print(f"Expected files: {coord_file} and {coord_ids_file}")
-        return
+//     except FileNotFoundError as e:
+//         print(f"Error: Could not find coordinate files from 04a: {e}")
+//         print(f"Expected files: {coord_file} and {coord_ids_file}")
+//         return
     
-    # Align the embedding IDs with coordinate IDs
-    coord_id_to_index = {eid: i for i, eid in enumerate(coord_embedding_ids)}
+//     # Align the embedding IDs with coordinate IDs
+//     coord_id_to_index = {eid: i for i, eid in enumerate(coord_embedding_ids)}
     
-    # Filter to only embedding_ids that have coordinates
-    valid_indices = []
-    valid_embedding_ids = []
+//     # Filter to only embedding_ids that have coordinates
+//     valid_indices = []
+//     valid_embedding_ids = []
     
-    for eid in embedding_ids:
-        if eid in coord_id_to_index:
-            valid_indices.append(coord_id_to_index[eid])
-            valid_embedding_ids.append(eid)
+//     for eid in embedding_ids:
+//         if eid in coord_id_to_index:
+//             valid_indices.append(coord_id_to_index[eid])
+//             valid_embedding_ids.append(eid)
     
-    if not valid_indices:
-        print("Warning: No embedding IDs match coordinate IDs")
-        return
+//     if not valid_indices:
+//         print("Warning: No embedding IDs match coordinate IDs")
+//         return
     
-    # Get coordinates for valid embeddings
-    valid_embedding_2d = embedding_2d[valid_indices]
+//     # Get coordinates for valid embeddings
+//     valid_embedding_2d = embedding_2d[valid_indices]
     
-    print(f"Aligned {len(valid_indices)} embeddings with coordinates")
-    print("First 10 valid embedding_ids:", valid_embedding_ids[:10])
+//     print(f"Aligned {len(valid_indices)} embeddings with coordinates")
+//     print("First 10 valid embedding_ids:", valid_embedding_ids[:10])
    
-    # Normalize orf_name for consistent lookup
-    module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
+//     # Normalize orf_name for consistent lookup
+//     module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
 
-    # Create lookup dictionaries for colors and markers
-    id_to_color = dict(zip(module_df["normalized_orf_id"], module_df["manual_color"]))
-    id_to_marker = dict(zip(module_df["normalized_orf_id"], module_df["manual_marker"]))
+//     # Create lookup dictionaries for colors and markers
+//     id_to_color = dict(zip(module_df["normalized_orf_id"], module_df["manual_color"]))
+//     id_to_marker = dict(zip(module_df["normalized_orf_id"], module_df["manual_marker"]))
 
-    # Assign colors and markers to embedding IDs
-    colors = [id_to_color.get(embedding_id, "#808080") for embedding_id in valid_embedding_ids]  # Default: gray
-    # markers = [id_to_marker.get(embedding_id, ".") for embedding_id in embedding_ids]      # Default: '.'
-    markers = [id_to_marker.get(embedding_id, ".") if pd.notna(id_to_marker.get(embedding_id)) else '.' for embedding_id in valid_embedding_ids] #if NaN or not in list, put a "." as marker style
+//     # Assign colors and markers to embedding IDs
+//     colors = [id_to_color.get(embedding_id, "#808080") for embedding_id in valid_embedding_ids]  # Default: gray
+//     # markers = [id_to_marker.get(embedding_id, ".") for embedding_id in embedding_ids]      # Default: '.'
+//     markers = [id_to_marker.get(embedding_id, ".") if pd.notna(id_to_marker.get(embedding_id)) else '.' for embedding_id in valid_embedding_ids] #if NaN or not in list, put a "." as marker style
 
-    # Group points for connecting lines - finding things that occur on the same contig
-    groups = defaultdict(list)
-    for i, embedding_id in enumerate(valid_embedding_ids):
-        parsed_id = parse_embedding_id(embedding_id)
-        groups[parsed_id].append(i)
+//     # Group points for connecting lines - finding things that occur on the same contig
+//     groups = defaultdict(list)
+//     for i, embedding_id in enumerate(valid_embedding_ids):
+//         parsed_id = parse_embedding_id(embedding_id)
+//         groups[parsed_id].append(i)
 
-    # Create UMAP figure (without legend)
-    fig, ax = plt.subplots(figsize=(10, 7))
+//     # Create UMAP figure (without legend)
+//     fig, ax = plt.subplots(figsize=(10, 7))
 
-    # Draw connections
-    for parsed_id, indices in groups.items():
-        if len(indices) > 1:
-            for i in range(len(indices) - 1):
-                for j in range(i + 1, len(indices)):
-                    idx1, idx2 = indices[i], indices[j]
-                    x1, y1 = valid_embedding_2d[idx1, 0], valid_embedding_2d[idx1, 1]
-                    x2, y2 = valid_embedding_2d[idx2, 0], valid_embedding_2d[idx2, 1]
-                    ax.plot([x1, x2], [y1, y2], color='#CCCCCC', alpha=0.5, linewidth=0.2,zorder=1)#only change in v3 from original script
+//     # Draw connections
+//     for parsed_id, indices in groups.items():
+//         if len(indices) > 1:
+//             for i in range(len(indices) - 1):
+//                 for j in range(i + 1, len(indices)):
+//                     idx1, idx2 = indices[i], indices[j]
+//                     x1, y1 = valid_embedding_2d[idx1, 0], valid_embedding_2d[idx1, 1]
+//                     x2, y2 = valid_embedding_2d[idx2, 0], valid_embedding_2d[idx2, 1]
+//                     ax.plot([x1, x2], [y1, y2], color='#CCCCCC', alpha=0.5, linewidth=0.2,zorder=1)#only change in v3 from original script
 
-    # Scatter plot points
-    for embedding, color, marker in zip(valid_embedding_2d, colors, markers):
-        ax.scatter(embedding[0], embedding[1], c=color, marker=marker, s=10, alpha=0.7)
+//     # Scatter plot points
+//     for embedding, color, marker in zip(valid_embedding_2d, colors, markers):
+//         ax.scatter(embedding[0], embedding[1], c=color, marker=marker, s=10, alpha=0.7)
 
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    plt.grid(False)
-    plt.tight_layout()
+//     ax.set_xticks([])
+//     ax.set_yticks([])
+//     ax.set_xticklabels([])
+//     ax.set_yticklabels([])
+//     plt.grid(False)
+//     plt.tight_layout()
 
-    # Save UMAP figure (without legend)
-    plt.savefig(f"{output_file}.png", dpi=600, bbox_inches="tight")
-    plt.savefig(f"{output_file}.svg", transparent=True)
-    print(f"Saved: {output_file}")
+//     # Save UMAP figure (without legend)
+//     plt.savefig(f"{output_file}.png", dpi=600, bbox_inches="tight")
+//     plt.savefig(f"{output_file}.svg", transparent=True)
+//     print(f"Saved: {output_file}")
 
-    # ----- Separate Legend Creation -----
+//     # ----- Separate Legend Creation -----
 
-    # Drop duplicates for one legend entry per genofeature
-    unique_features = module_df.drop_duplicates(subset=["genofeature"], keep="first")
+//     # Drop duplicates for one legend entry per genofeature
+//     unique_features = module_df.drop_duplicates(subset=["genofeature"], keep="first")
 
-    # Filter to only those with known display names
-    existing_keys = unique_features["genofeature"].isin(display_names.keys())
-    unique_features = unique_features[existing_keys]
+//     # Filter to only those with known display names
+//     existing_keys = unique_features["genofeature"].isin(display_names.keys())
+//     unique_features = unique_features[existing_keys]
 
-    # Add display names
-    unique_features["display_name"] = unique_features["genofeature"].map(display_names)
+//     # Add display names
+//     unique_features["display_name"] = unique_features["genofeature"].map(display_names)
 
-    # Order and sort
-    unique_features["genofeature"] = pd.Categorical(
-        unique_features["genofeature"],
-        categories=list(display_names.keys()),
-        ordered=True
-    )
-    unique_features = unique_features.sort_values("genofeature")
+//     # Order and sort
+//     unique_features["genofeature"] = pd.Categorical(
+//         unique_features["genofeature"],
+//         categories=list(display_names.keys()),
+//         ordered=True
+//     )
+//     unique_features = unique_features.sort_values("genofeature")
 
-    # Create legend handles
-    legend_handles = [
-        mlines.Line2D([], [], color=row["manual_color"], marker=row["manual_marker"], linestyle="None", markersize=8,
-                      label=row["display_name"])
-        for _, row in unique_features.iterrows()
-    ]
+//     # Create legend handles
+//     legend_handles = [
+//         mlines.Line2D([], [], color=row["manual_color"], marker=row["manual_marker"], linestyle="None", markersize=8,
+//                       label=row["display_name"])
+//         for _, row in unique_features.iterrows()
+//     ]
 
-    # Create a new figure just for the legend
-    legend_fig = plt.figure(figsize=(4, len(legend_handles) * 0.3))
-    legend_ax = legend_fig.add_subplot(111)
-    legend_ax.axis("off")
-    legend_ax.legend(handles=legend_handles, title="Genofeature", loc="center left", frameon=False)
+//     # Create a new figure just for the legend
+//     legend_fig = plt.figure(figsize=(4, len(legend_handles) * 0.3))
+//     legend_ax = legend_fig.add_subplot(111)
+//     legend_ax.axis("off")
+//     legend_ax.legend(handles=legend_handles, title="Genofeature", loc="center left", frameon=False)
 
-    legend_fig.savefig(f"{output_file}_legend.png", dpi=300, bbox_inches="tight")
-    legend_fig.savefig(f"{output_file}_legend.svg", dpi=300, bbox_inches="tight")
-    print(f"Saved legend: {output_file}_legend")
+//     legend_fig.savefig(f"{output_file}_legend.png", dpi=300, bbox_inches="tight")
+//     legend_fig.savefig(f"{output_file}_legend.svg", dpi=300, bbox_inches="tight")
+//     print(f"Saved legend: {output_file}_legend")
 
-    # Close figures
-    plt.close(fig)
-    plt.close(legend_fig)
+//     # Close figures
+//     plt.close(fig)
+//     plt.close(legend_fig)
 
 
-if __name__ == "__main__":
-    # Load data
-    # Load embedding IDs only (we don't need full embeddings since we're using coordinates from 04a)
-    selected_subdirs = ["POL", "RNR", "PolB", "PolC", "RNR_classIbeta", "helicase", "RNR_classIII"]
+// if __name__ == "__main__":
+//     # Load data
+//     # Load embedding IDs only (we don't need full embeddings since we're using coordinates from 04a)
+//     selected_subdirs = ["POL", "RNR", "PolB", "PolC", "RNR_classIbeta", "helicase", "RNR_classIII"]
 
-    embedding_ids = load_all_embedding_ids(input_dir, selected_subdirs)
+//     embedding_ids = load_all_embedding_ids(input_dir, selected_subdirs)
 
-    module_df = load_module(module_file)
-    color_map, display_names, marker_map = load_metadata(metadata_file)
-    # print(color_map)
-    # print(display_names)
-    # print(marker_map)
+//     module_df = load_module(module_file)
+//     color_map, display_names, marker_map = load_metadata(metadata_file)
+//     # print(color_map)
+//     # print(display_names)
+//     # print(marker_map)
 
-    if module_df is not None:
-        # Map colors to metadata
-        module_df['manual_color'] = module_df[column_name].map(color_map)
-        module_df['display_names'] = module_df[column_name].map(display_names)
-        module_df['manual_marker'] = module_df[column_name].map(marker_map)
-        print("Assigned Colors:", color_map)
-        print("Assigned Labels:", display_names)
-        print("Assigned Shapes:", marker_map)
+//     if module_df is not None:
+//         # Map colors to metadata
+//         module_df['manual_color'] = module_df[column_name].map(color_map)
+//         module_df['display_names'] = module_df[column_name].map(display_names)
+//         module_df['manual_marker'] = module_df[column_name].map(marker_map)
+//         print("Assigned Colors:", color_map)
+//         print("Assigned Labels:", display_names)
+//         print("Assigned Shapes:", marker_map)
 
-    print(module_df.head())
+//     print(module_df.head())
 
-    if len(embedding_ids) > 0:
-        for nn in n_neighbors_list:
-            for md in min_dist_list:
-                md_int = int(md * 10)  # Convert min_dist to integer for filename
-                output_file = os.path.join(output_dir, f"umap_nn{nn}_md{md_int}")
-                plot_umap(embedding_ids, module_df, nn, md, output_file, display_names)
-    else:
-        print("No valid embeddings found.")
+//     if len(embedding_ids) > 0:
+//         for nn in n_neighbors_list:
+//             for md in min_dist_list:
+//                 md_int = int(md * 10)  # Convert min_dist to integer for filename
+//                 output_file = os.path.join(output_dir, f"umap_nn{nn}_md{md_int}")
+//                 plot_umap(embedding_ids, module_df, nn, md, output_file, display_names)
+//     else:
+//         print("No valid embeddings found.")
 
-    """
-}
+//     """
+// }
 
-process 05e {
-    publishDir "${params.outdir}/umap_projection",
-        mode: 'copy'
+// process 05e {
+//     publishDir "${params.outdir}/umap_projection",
+//         mode: 'copy'
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+//     conda "/home/nolanv/.conda/envs/esm-umap"
     
-    input:
+//     input:
+//         val test
 
         
-    output:
+//     output:
+//         val test
+
+//     script:
+//     """
+// import os
+// import numpy as np
+// import pandas as pd
+// import matplotlib.pyplot as plt
+// import matplotlib.lines as mlines
+// from collections import defaultdict
+// from PIL import Image
+// import math
+
+// #----------v_25_06_26----------
+// # Added automatic tiling feature at the end to create a combined image of all plots
+// #----------v_25_06_25----------
+// # UPDATED: Now loads UMAP coordinates directly from 04a directory for consistency
+// # Uses the same coordinate files as all other downstream scripts
+// # Pointed to updated ctg_df_filtered.tsv input file name
+// #----------v_25_06_20-----------
+// # IMPORTANT UPDATE: 
+// # previous scripts when coloring GP4 would also pull GP41 - This script has been modified to find "exact" matches rather than containing matches.
+// #----------------------------------------------------
+// # This script recolors UMAP embeddings based on specified 
+// # genofeatures using the consistent UMAP coordinates from 04a.
+// # This ensures all scripts use the exact same coordinate system.
+
+// # UPDATED v25_06_25: Now loads coordinates directly from 04a_umap directory
+// # instead of from 05d to ensure consistency across all downstream scripts.
+// # Alicia Holk aholk@udel.edu
+// #----------------------------------------------------
+
+// # Update paths as needed
+// base_dir = "/mnt/VEIL/users/aholk/ENA_2025"
+// coords_dir = os.path.join(base_dir, "04a_umap")  # Use coordinates directly from 04a for consistency
+// # UMAP parameters to match other scripts
+// umap_nn = 100
+// umap_md = 0.7
+// md_int = int(umap_md * 10)  # Convert to integer for filename
+// embedding_2d_file = os.path.join(coords_dir, f"embedding_2d_nn{umap_nn}_md{md_int}.npy")
+// embedding_ids_file = os.path.join(coords_dir, f"embedding_ids_nn{umap_nn}_md{md_int}.txt")
+// output_dir = os.path.join(base_dir, "05e_genofeature_highlighting")
+// os.makedirs(output_dir, exist_ok=True)
+
+// module_file = os.path.join(base_dir, "02e_orf_ctg_summary", "ctg_df.tsv")
+// metadata_file = os.path.join(base_dir, "bin", "protein_metadata_all.txt")
+
+// selected_subdirs = ["POL", "RNR", "PolB", "PolC", "RNR_classIbeta", "helicase", "RNR_classIII"]
 
 
-    script:
-    """
-import os
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-from collections import defaultdict
-from PIL import Image
-import math
+// # --------- PARAMETERS ---------
+// visible_features_list = [
+//     ['RDKF'],
+//     ['RDKY'],
+//     ['RDKH'],
+//     ['RDKL'],
+//     ['TDKY'],
+//     ['RDNF'],
+//     ['EDKY'],
+//     ['KDKL'],
+//     ['SDKL'],
+//     ['DDKL'],
+//     ['CDKY'],
+//     ['NCECI'],
+//     ['NCECV'],
+//     ['NCECP'],
+//     ['NCECA'],
+//     ['QCECL'],
+//     ['NCECL'],
+//     ['NCECM'],
+//     ['RNRclassIbeta'],
+//     ['RNRclassIII'],
+//     ['rPolB'],
+//     ['pPolB'],
+//     ['piPolB'],
+//     ['RecA'],
+//     ['UvsX'],
+//     ['RecB'],
+//     ['RecD'],
+//     ['PcrA'],
+//     ['UvrD'],
+//     ['Dda'],
+//     ['UvsW'],
+//     ['UvrB'],
+//     ['RecG'],
+//     ['SNF2'],
+//     ['Twinkle'],
+//     ['DnaB'],
+//     ['Gp4'],
+//     ['Gp41'],
+//     ['clamp'],
+//     ['primase']
+//  #['RDKF', 'RDKY'],  # Example: plot both together
+//     # Add more lists as needed
+//     # make sure it keeps all the points
+// ]
 
-#----------v_25_06_26----------
-# Added automatic tiling feature at the end to create a combined image of all plots
-#----------v_25_06_25----------
-# UPDATED: Now loads UMAP coordinates directly from 04a directory for consistency
-# Uses the same coordinate files as all other downstream scripts
-# Pointed to updated ctg_df_filtered.tsv input file name
-#----------v_25_06_20-----------
-# IMPORTANT UPDATE: 
-# previous scripts when coloring GP4 would also pull GP41 - This script has been modified to find "exact" matches rather than containing matches.
-#----------------------------------------------------
-# This script recolors UMAP embeddings based on specified 
-# genofeatures using the consistent UMAP coordinates from 04a.
-# This ensures all scripts use the exact same coordinate system.
+// # --------- LOAD DATA ---------
+// # Note: We no longer load embeddings since we use precomputed coordinates from 04a
 
-# UPDATED v25_06_25: Now loads coordinates directly from 04a_umap directory
-# instead of from 05d to ensure consistency across all downstream scripts.
-# Alicia Holk aholk@udel.edu
-#----------------------------------------------------
+// # Load UMAP coordinates from 04a (always use precomputed coordinates for consistency)
+// if os.path.exists(embedding_2d_file) and os.path.exists(embedding_ids_file):
+//     print(f"Loading UMAP coordinates from 04a: {embedding_2d_file}")
+//     embedding_2d = np.load(embedding_2d_file)
+//     with open(embedding_ids_file) as f:
+//         embedding_ids = [line.strip() for line in f]
+//     print(f"Loaded {len(embedding_ids)} embedding IDs and coordinates from 04a")
+// else:
+//     print(f"Error: Required coordinate files not found in 04a directory:")
+//     print(f"  Expected: {embedding_2d_file}")
+//     print(f"  Expected: {embedding_ids_file}")
+//     print("Please run 04a_umap_filter_25_06_25.py first to generate coordinates.")
+//     exit(1)
+// embedding_id_to_index = {eid: idx for idx, eid in enumerate(embedding_ids)}
 
-# Update paths as needed
-base_dir = "/mnt/VEIL/users/aholk/ENA_2025"
-coords_dir = os.path.join(base_dir, "04a_umap")  # Use coordinates directly from 04a for consistency
-# UMAP parameters to match other scripts
-umap_nn = 100
-umap_md = 0.7
-md_int = int(umap_md * 10)  # Convert to integer for filename
-embedding_2d_file = os.path.join(coords_dir, f"embedding_2d_nn{umap_nn}_md{md_int}.npy")
-embedding_ids_file = os.path.join(coords_dir, f"embedding_ids_nn{umap_nn}_md{md_int}.txt")
-output_dir = os.path.join(base_dir, "05e_genofeature_highlighting")
-os.makedirs(output_dir, exist_ok=True)
+// module_df = pd.read_csv(module_file, sep='\t')
+// genofeature_cols = [col for col in module_df.columns if 'genofeature' in col]
+// module_df["module"] = module_df[genofeature_cols].astype(str).apply(
+//     lambda row: "_".join(val for val in row if val != 'nan'), axis=1
+// )
 
-module_file = os.path.join(base_dir, "02e_orf_ctg_summary", "ctg_df.tsv")
-metadata_file = os.path.join(base_dir, "bin", "protein_metadata_all.txt")
+// metadata_df = pd.read_csv(metadata_file, sep="\t")
+// color_map = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
+// display_map = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
+// marker_map = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
 
-selected_subdirs = ["POL", "RNR", "PolB", "PolC", "RNR_classIbeta", "helicase", "RNR_classIII"]
+// def map_orf_to_metadata(module_df, color_map, display_map, marker_map):
+//     orf_metadata = {}
+//     for col in module_df.columns:
+//         if 'orf_id' in col:
+//             genofeature_col = col.replace('orf_id', 'genofeature')
+//             if genofeature_col in module_df.columns:
+//                 for idx, orf_id in enumerate(module_df[col]):
+//                     genofeature = module_df[genofeature_col].iloc[idx]
+//                     if genofeature in color_map:
+//                         orf_metadata[orf_id] = {
+//                             'color': color_map[genofeature],
+//                             'name': display_map[genofeature],
+//                             'marker': marker_map[genofeature]
+//                         }
+//     return orf_metadata
 
+// orf_metadata = map_orf_to_metadata(module_df, color_map, display_map, marker_map)
 
-# --------- PARAMETERS ---------
-visible_features_list = [
-    ['RDKF'],
-    ['RDKY'],
-    ['RDKH'],
-    ['RDKL'],
-    ['TDKY'],
-    ['RDNF'],
-    ['EDKY'],
-    ['KDKL'],
-    ['SDKL'],
-    ['DDKL'],
-    ['CDKY'],
-    ['NCECI'],
-    ['NCECV'],
-    ['NCECP'],
-    ['NCECA'],
-    ['QCECL'],
-    ['NCECL'],
-    ['NCECM'],
-    ['RNRclassIbeta'],
-    ['RNRclassIII'],
-    ['rPolB'],
-    ['pPolB'],
-    ['piPolB'],
-    ['RecA'],
-    ['UvsX'],
-    ['RecB'],
-    ['RecD'],
-    ['PcrA'],
-    ['UvrD'],
-    ['Dda'],
-    ['UvsW'],
-    ['UvrB'],
-    ['RecG'],
-    ['SNF2'],
-    ['Twinkle'],
-    ['DnaB'],
-    ['Gp4'],
-    ['Gp41'],
-    ['clamp'],
-    ['primase']
- #['RDKF', 'RDKY'],  # Example: plot both together
-    # Add more lists as needed
-    # make sure it keeps all the points
-]
+// def define_connections(module_df, visible_features):
+//     connections = []
+//     visible_orf_ids = set()
+//     legend_features = set()
+//     for _, row in module_df.iterrows():
+//         module_features = set(row['module'].split('_'))
+//         if any(feature in module_features for feature in visible_features):
+//             orf_ids = [row[col] for col in module_df.columns if 'orf_id' in col]
+//             visible_orf_ids.update(orf_ids)
+//             legend_features.update(module_features)
+//             for i in range(len(orf_ids)):
+//                 for j in range(i + 1, len(orf_ids)):
+//                     connections.append((orf_ids[i], orf_ids[j]))
+//     return connections, visible_orf_ids, legend_features
+// # def define_connections(module_df, visible_features):
+// #     connections = []
+// #     visible_orf_ids = set()
+// #     legend_features = set()
+// #     for _, row in module_df.iterrows():
+// #         if any(feature in row['module'] for feature in visible_features):
+// #             orf_ids = [row[col] for col in module_df.columns if 'orf_id' in col]
+// #             visible_orf_ids.update(orf_ids)
+// #             module_features = row['module'].split('_')
+// #             legend_features.update(module_features)
+// #             for i in range(len(orf_ids)):
+// #                 for j in range(i + 1, len(orf_ids)):
+// #                     connections.append((orf_ids[i], orf_ids[j]))
+// #     return connections, visible_orf_ids, legend_features
 
-# --------- LOAD DATA ---------
-# Note: We no longer load embeddings since we use precomputed coordinates from 04a
+// # --------- PLOTTING ---------
+// for visible_features in visible_features_list:
+//     # Determine which ORFs/contigs to highlight
+//     connections, visible_orf_ids, legend_features = define_connections(module_df, visible_features)
 
-# Load UMAP coordinates from 04a (always use precomputed coordinates for consistency)
-if os.path.exists(embedding_2d_file) and os.path.exists(embedding_ids_file):
-    print(f"Loading UMAP coordinates from 04a: {embedding_2d_file}")
-    embedding_2d = np.load(embedding_2d_file)
-    with open(embedding_ids_file) as f:
-        embedding_ids = [line.strip() for line in f]
-    print(f"Loaded {len(embedding_ids)} embedding IDs and coordinates from 04a")
-else:
-    print(f"Error: Required coordinate files not found in 04a directory:")
-    print(f"  Expected: {embedding_2d_file}")
-    print(f"  Expected: {embedding_ids_file}")
-    print("Please run 04a_umap_filter_25_06_25.py first to generate coordinates.")
-    exit(1)
-embedding_id_to_index = {eid: idx for idx, eid in enumerate(embedding_ids)}
+//     # Skip if none of the features are present
+//     if not visible_orf_ids:
+//         print(f"Skipping {visible_features}: not present in data.")
+//         continue
 
-module_df = pd.read_csv(module_file, sep='\t')
-genofeature_cols = [col for col in module_df.columns if 'genofeature' in col]
-module_df["module"] = module_df[genofeature_cols].astype(str).apply(
-    lambda row: "_".join(val for val in row if val != 'nan'), axis=1
-)
+//     fig, ax = plt.subplots(figsize=(10, 7))
+//     # 1. Plot grayed-out points (background)
+//     for eid in embedding_ids:
 
-metadata_df = pd.read_csv(metadata_file, sep="\t")
-color_map = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-display_map = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
-marker_map = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
+//         # Skip if the embedding ID is not in the mapping
+//         if pd.isna(eid) or eid not in embedding_id_to_index:
+//             continue
 
-def map_orf_to_metadata(module_df, color_map, display_map, marker_map):
-    orf_metadata = {}
-    for col in module_df.columns:
-        if 'orf_id' in col:
-            genofeature_col = col.replace('orf_id', 'genofeature')
-            if genofeature_col in module_df.columns:
-                for idx, orf_id in enumerate(module_df[col]):
-                    genofeature = module_df[genofeature_col].iloc[idx]
-                    if genofeature in color_map:
-                        orf_metadata[orf_id] = {
-                            'color': color_map[genofeature],
-                            'name': display_map[genofeature],
-                            'marker': marker_map[genofeature]
-                        }
-    return orf_metadata
+//         if eid not in visible_orf_ids:
+//             idx = embedding_id_to_index[eid]
+//             metadata = orf_metadata.get(eid, {'color': '#808080', 'marker': '.'})
+//             ax.scatter(
+//                 embedding_2d[idx, 0], embedding_2d[idx, 1],
+//                 c="#D3D3D3", marker=metadata['marker'], s=10, alpha=0.05, zorder=1
+//             )
 
-orf_metadata = map_orf_to_metadata(module_df, color_map, display_map, marker_map)
+//     # 2. Plot highlighted edges (middle)
+//     for orf1, orf2 in connections:
+//         if orf1 in visible_orf_ids and orf2 in visible_orf_ids:
+//             idx1 = embedding_id_to_index.get(orf1)
+//             idx2 = embedding_id_to_index.get(orf2)
+//             if idx1 is not None and idx2 is not None:
+//                 ax.plot(
+//                     [embedding_2d[idx1, 0], embedding_2d[idx2, 0]],
+//                     [embedding_2d[idx1, 1], embedding_2d[idx2, 1]],
+//                     color="gray", alpha=0.2, linewidth=0.5, zorder=2
+//                 )
 
-def define_connections(module_df, visible_features):
-    connections = []
-    visible_orf_ids = set()
-    legend_features = set()
-    for _, row in module_df.iterrows():
-        module_features = set(row['module'].split('_'))
-        if any(feature in module_features for feature in visible_features):
-            orf_ids = [row[col] for col in module_df.columns if 'orf_id' in col]
-            visible_orf_ids.update(orf_ids)
-            legend_features.update(module_features)
-            for i in range(len(orf_ids)):
-                for j in range(i + 1, len(orf_ids)):
-                    connections.append((orf_ids[i], orf_ids[j]))
-    return connections, visible_orf_ids, legend_features
-# def define_connections(module_df, visible_features):
-#     connections = []
-#     visible_orf_ids = set()
-#     legend_features = set()
-#     for _, row in module_df.iterrows():
-#         if any(feature in row['module'] for feature in visible_features):
-#             orf_ids = [row[col] for col in module_df.columns if 'orf_id' in col]
-#             visible_orf_ids.update(orf_ids)
-#             module_features = row['module'].split('_')
-#             legend_features.update(module_features)
-#             for i in range(len(orf_ids)):
-#                 for j in range(i + 1, len(orf_ids)):
-#                     connections.append((orf_ids[i], orf_ids[j]))
-#     return connections, visible_orf_ids, legend_features
+//     # 3. Plot highlighted points (foreground, after edges)
+//     for eid in visible_orf_ids:
 
-# --------- PLOTTING ---------
-for visible_features in visible_features_list:
-    # Determine which ORFs/contigs to highlight
-    connections, visible_orf_ids, legend_features = define_connections(module_df, visible_features)
-
-    # Skip if none of the features are present
-    if not visible_orf_ids:
-        print(f"Skipping {visible_features}: not present in data.")
-        continue
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-    # 1. Plot grayed-out points (background)
-    for eid in embedding_ids:
-
-        # Skip if the embedding ID is not in the mapping
-        if pd.isna(eid) or eid not in embedding_id_to_index:
-            continue
-
-        if eid not in visible_orf_ids:
-            idx = embedding_id_to_index[eid]
-            metadata = orf_metadata.get(eid, {'color': '#808080', 'marker': '.'})
-            ax.scatter(
-                embedding_2d[idx, 0], embedding_2d[idx, 1],
-                c="#D3D3D3", marker=metadata['marker'], s=10, alpha=0.05, zorder=1
-            )
-
-    # 2. Plot highlighted edges (middle)
-    for orf1, orf2 in connections:
-        if orf1 in visible_orf_ids and orf2 in visible_orf_ids:
-            idx1 = embedding_id_to_index.get(orf1)
-            idx2 = embedding_id_to_index.get(orf2)
-            if idx1 is not None and idx2 is not None:
-                ax.plot(
-                    [embedding_2d[idx1, 0], embedding_2d[idx2, 0]],
-                    [embedding_2d[idx1, 1], embedding_2d[idx2, 1]],
-                    color="gray", alpha=0.2, linewidth=0.5, zorder=2
-                )
-
-    # 3. Plot highlighted points (foreground, after edges)
-    for eid in visible_orf_ids:
-
-        # Skip if the embedding ID is not in the mapping
-        if pd.isna(eid) or eid not in embedding_id_to_index:
-           continue
+//         # Skip if the embedding ID is not in the mapping
+//         if pd.isna(eid) or eid not in embedding_id_to_index:
+//            continue
         
-        idx = embedding_id_to_index[eid]
-        metadata = orf_metadata.get(eid, {'color': '#808080', 'marker': '.'})
-        ax.scatter(
-            embedding_2d[idx, 0], embedding_2d[idx, 1],
-            c=metadata['color'], marker=metadata['marker'], s=10, alpha=0.7, zorder=3
-        )
+//         idx = embedding_id_to_index[eid]
+//         metadata = orf_metadata.get(eid, {'color': '#808080', 'marker': '.'})
+//         ax.scatter(
+//             embedding_2d[idx, 0], embedding_2d[idx, 1],
+//             c=metadata['color'], marker=metadata['marker'], s=10, alpha=0.7, zorder=3
+//         )
 
-    ax.set_xticks([])
-    ax.set_yticks([])
+//     ax.set_xticks([])
+//     ax.set_yticks([])
 
-    # Add visible_features label below the plot
-    if visible_features:
-        label = ", ".join(visible_features)
-        plt.figtext(0.5, -0.05, label, ha='center', va='top', fontsize=14)
+//     # Add visible_features label below the plot
+//     if visible_features:
+//         label = ", ".join(visible_features)
+//         plt.figtext(0.5, -0.05, label, ha='center', va='top', fontsize=14)
 
-    # Save plot
-    visible_str = "_".join(visible_features)
-    output_filename = f"umap_{visible_str}_recolor"
-    output_file_base = os.path.join(output_dir, output_filename)
-    plt.savefig(f"{output_file_base}_plot.png", dpi=600, bbox_inches="tight")
-    plt.savefig(f"{output_file_base}_plot.svg", transparent=True, bbox_inches="tight")
-    plt.close()
+//     # Save plot
+//     visible_str = "_".join(visible_features)
+//     output_filename = f"umap_{visible_str}_recolor"
+//     output_file_base = os.path.join(output_dir, output_filename)
+//     plt.savefig(f"{output_file_base}_plot.png", dpi=600, bbox_inches="tight")
+//     plt.savefig(f"{output_file_base}_plot.svg", transparent=True, bbox_inches="tight")
+//     plt.close()
 
-    # Legend
-    master_genofeature_order = metadata_df["genofeature"].tolist()
-    feature_handles = []
-    feature_set = set(legend_features)
-    for feature in master_genofeature_order:
-        if feature in feature_set:
-            feature_row = metadata_df[metadata_df["genofeature"] == feature]
-            if not feature_row.empty:
-                color = feature_row.iloc[0]["color"] if "color" in feature_row.columns else "#808080"
-                marker = feature_row.iloc[0]["marker"] if "marker" in feature_row.columns else "."
-                display_name = feature_row.iloc[0]["display_name"] if "display_name" in feature_row.columns else feature
-                handle = mlines.Line2D([], [], color=color,
-                                       marker=marker, linestyle="None",
-                                       markersize=8, label=display_name)
-                feature_handles.append(handle)
-    fig, ax = plt.subplots(figsize=(3, max(1, len(feature_handles) * 0.3)))
-    legend = ax.legend(handles=feature_handles,
-                       loc="center left",
-                       frameon=False,
-                       handlelength=0.5,
-                       handletextpad=1,
-                       fontsize=6,
-                       title="Feature Types",
-                       title_fontsize=7,
-                       ncol=1)
-    ax.axis('off')
-    plt.savefig(f"{output_file_base}_legend.png", dpi=600, bbox_inches="tight")
-    plt.close()
+//     # Legend
+//     master_genofeature_order = metadata_df["genofeature"].tolist()
+//     feature_handles = []
+//     feature_set = set(legend_features)
+//     for feature in master_genofeature_order:
+//         if feature in feature_set:
+//             feature_row = metadata_df[metadata_df["genofeature"] == feature]
+//             if not feature_row.empty:
+//                 color = feature_row.iloc[0]["color"] if "color" in feature_row.columns else "#808080"
+//                 marker = feature_row.iloc[0]["marker"] if "marker" in feature_row.columns else "."
+//                 display_name = feature_row.iloc[0]["display_name"] if "display_name" in feature_row.columns else feature
+//                 handle = mlines.Line2D([], [], color=color,
+//                                        marker=marker, linestyle="None",
+//                                        markersize=8, label=display_name)
+//                 feature_handles.append(handle)
+//     fig, ax = plt.subplots(figsize=(3, max(1, len(feature_handles) * 0.3)))
+//     legend = ax.legend(handles=feature_handles,
+//                        loc="center left",
+//                        frameon=False,
+//                        handlelength=0.5,
+//                        handletextpad=1,
+//                        fontsize=6,
+//                        title="Feature Types",
+//                        title_fontsize=7,
+//                        ncol=1)
+//     ax.axis('off')
+//     plt.savefig(f"{output_file_base}_legend.png", dpi=600, bbox_inches="tight")
+//     plt.close()
 
-# --------- AUTOMATIC TILING ---------
-# Create a tiled image of all generated plots
+// # --------- AUTOMATIC TILING ---------
+// # Create a tiled image of all generated plots
 
-def tile_images(image_dir, output_file, padding=10):
-    """Tile all PNG plot files in the directory into a single image."""
-    # Find all PNG plot files (excluding legend files)
-    png_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) 
-                 if f.lower().endswith("_plot.png")]
-    png_files.sort()  # Sort alphabetically
+// def tile_images(image_dir, output_file, padding=10):
+//     # Find all PNG plot files (excluding legend files)
+//     png_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) 
+//                  if f.lower().endswith("_plot.png")]
+//     png_files.sort()  # Sort alphabetically
     
-    if not png_files:
-        print("No plot PNG files found for tiling.")
-        return
+//     if not png_files:
+//         print("No plot PNG files found for tiling.")
+//         return
     
-    print(f"Tiling {len(png_files)} plot images...")
+//     print(f"Tiling {len(png_files)} plot images...")
     
-    # Resize all images to the same height, keeping aspect ratio
-    images = [Image.open(f) for f in png_files]
-    heights = [img.height for img in images]
-    target_height = max(heights)  # Use the height of the tallest image
+//     # Resize all images to the same height, keeping aspect ratio
+//     images = [Image.open(f) for f in png_files]
+//     heights = [img.height for img in images]
+//     target_height = max(heights)  # Use the height of the tallest image
     
-    resized_images = []
-    resized_sizes = []
-    for img in images:
-        w, h = img.size
-        new_w = int(w * (target_height / h))
-        resized_img = img.resize((new_w, target_height), Image.LANCZOS)
-        resized_images.append(resized_img)
-        resized_sizes.append((new_w, target_height))
+//     resized_images = []
+//     resized_sizes = []
+//     for img in images:
+//         w, h = img.size
+//         new_w = int(w * (target_height / h))
+//         resized_img = img.resize((new_w, target_height), Image.LANCZOS)
+//         resized_images.append(resized_img)
+//         resized_sizes.append((new_w, target_height))
     
-    n = len(resized_images)
-    cols = math.ceil(math.sqrt(n))
-    rows = math.ceil(n / cols)
+//     n = len(resized_images)
+//     cols = math.ceil(math.sqrt(n))
+//     rows = math.ceil(n / cols)
     
-    # Compute max width for each column
-    col_widths = [0] * cols
-    row_heights = [target_height] * rows  # all rows have the same height now
-    for idx, (w, h) in enumerate(resized_sizes):
-        row = idx // cols
-        col = idx % cols
-        if w > col_widths[col]:
-            col_widths[col] = w
+//     # Compute max width for each column
+//     col_widths = [0] * cols
+//     row_heights = [target_height] * rows  # all rows have the same height now
+//     for idx, (w, h) in enumerate(resized_sizes):
+//         row = idx // cols
+//         col = idx % cols
+//         if w > col_widths[col]:
+//             col_widths[col] = w
     
-    # Compute x offsets for columns and y offsets for rows
-    x_offsets = [0]
-    for w in col_widths[:-1]:
-        x_offsets.append(x_offsets[-1] + w + padding)
-    y_offsets = [0]
-    for h in row_heights[:-1]:
-        y_offsets.append(y_offsets[-1] + h + padding)
+//     # Compute x offsets for columns and y offsets for rows
+//     x_offsets = [0]
+//     for w in col_widths[:-1]:
+//         x_offsets.append(x_offsets[-1] + w + padding)
+//     y_offsets = [0]
+//     for h in row_heights[:-1]:
+//         y_offsets.append(y_offsets[-1] + h + padding)
     
-    canvas_width = sum(col_widths) + padding * (cols - 1)
-    canvas_height = sum(row_heights) + padding * (rows - 1)
-    canvas = Image.new('RGBA', (canvas_width, canvas_height), (255, 255, 255, 255))
+//     canvas_width = sum(col_widths) + padding * (cols - 1)
+//     canvas_height = sum(row_heights) + padding * (rows - 1)
+//     canvas = Image.new('RGBA', (canvas_width, canvas_height), (255, 255, 255, 255))
     
-    for idx, img in enumerate(resized_images):
-        row = idx // cols
-        col = idx % cols
-        x = x_offsets[col]
-        y = y_offsets[row]
-        canvas.paste(img, (x, y))
+//     for idx, img in enumerate(resized_images):
+//         row = idx // cols
+//         col = idx % cols
+//         x = x_offsets[col]
+//         y = y_offsets[row]
+//         canvas.paste(img, (x, y))
     
-    # Save the tiled image
-    canvas.save(output_file)
-    print(f"Tiled image saved as {output_file}")
+//     # Save the tiled image
+//     canvas.save(output_file)
+//     print(f"Tiled image saved as {output_file}")
 
-# Create tiled image of all plots
-tiled_output_file = os.path.join(output_dir, "genofeature_highlighting_tiled_all.png")
-tile_images(output_dir, tiled_output_file)
+// # Create tiled image of all plots
+// tiled_output_file = os.path.join(output_dir, "genofeature_highlighting_tiled_all.png")
+// tile_images(output_dir, tiled_output_file)
 
-print(f"\nAll plots completed! Tiled image available at: {tiled_output_file}")
-    """
-}
+// print(f"\nAll plots completed! Tiled image available at: {tiled_output_file}")
+//     """
+// }
 
 
 process UMAP_PROJECTION {
@@ -1344,5 +1347,8 @@ tile_images("plots", "plots/tiled_image.png", legend_handles)
 }
 
 workflow {
-    MODIFY_CLUSTERS()
+    ch_cluster_dir = Channel.fromPath(params.clusters_dir)
+    
+    MODIFY_CLUSTERS(ch_cluster_dir)
+
 }
