@@ -27,6 +27,7 @@ process CLEAN_FASTA_HEADERS {
 process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
+    label 'standard'
     publishDir "${params.outdir}/${meta.id}/phidra",
         mode: 'copy',
         saveAs: { filename ->
@@ -80,7 +81,7 @@ process PHIDRA {
 process PASV {
     tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
-    cpus 4
+    label 'standard'
     publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
         mode: 'copy',
         pattern: "pasv_output/output/*.tsv"
@@ -373,7 +374,7 @@ process STANDARDIZE_OUTPUTS {
     tuple val(meta), path(tsv_files)
 
     output:
-    tuple val(meta), path("combined_results.tsv"), emit: standardized
+    tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
 
     script:
     """
@@ -442,10 +443,10 @@ process STANDARDIZE_OUTPUTS {
         
         print(f"Final combined shape: {combined.shape}")
         print(f"Final columns: {combined.columns.tolist()}")
-        combined.to_csv("combined_results.tsv", sep='\\t', index=False)
+        combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
     else:
         print("No data to combine, creating empty output")
-        pd.DataFrame(columns=required_columns).to_csv("combined_results.tsv", sep='\\t', index=False)
+        pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
     """
 }
 
@@ -619,13 +620,13 @@ process DUPLICATE_HANDLE {
     
     # Read the input file with proper quoting and correct separator
     df = pd.read_csv("${input_file}", sep='\\t')
-    
-    # Find duplicates based on both genome_id and orf_id
-    duplicates = df[df.duplicated(subset=['genome_id', 'orf_id'], keep=False)]
+
+    # Find duplicates based on both contig_id and orf_id
+    duplicates = df[df.duplicated(subset=['contig_id', 'orf_id'], keep=False)]
     
     # Sort duplicates for better readability
-    duplicates = duplicates.sort_values(['genome_id', 'orf_id'])
-    
+    duplicates = duplicates.sort_values(['contig_id', 'orf_id'])
+
     # Save duplicates with tab separator
     duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
     
@@ -690,7 +691,6 @@ process SPLIT_BY_GENOFEATURE {
 
     input:
         tuple val(meta), path(filtered_tsv)
-        tuple val(meta), path(input_fasta)
 
     output:
         tuple val(meta), path("files_for_embeddings"), emit: fastas_for_embeddings
@@ -705,7 +705,7 @@ process SPLIT_BY_GENOFEATURE {
     # Create the base output directory
     os.makedirs("files_for_embeddings", exist_ok=True)
     df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${input_fasta}", "fasta"))
+    seq_dict = SeqIO.to_dict(SeqIO.parse("${meta.cleaned_fasta}", "fasta"))
 
     # Group by protein and genofeature
     for protein in df['protein'].unique():
@@ -734,6 +734,52 @@ process SPLIT_BY_GENOFEATURE {
     """
 }
 
+process COMBINE_DATASETS {
+
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}",
+        mode: 'copy',
+        pattern: "*.tsv"
+
+    input:
+        path(tsv_files)
+
+    output:
+        path "combined_datasets.tsv", emit: combined
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    import os
+
+    dfs = []
+    input_files = "${tsv_files}".split()
+
+    for tsv_file in input_files:
+        if os.path.exists(tsv_file):
+            print(f"Reading file: {tsv_file}")
+            try:
+                df = pd.read_csv(tsv_file, sep='\\t')
+                if not df.empty:
+                    dfs.append(df)
+                    print(f"Added {len(df)} rows from {tsv_file}")
+                else:
+                    print(f"Warning: Empty DataFrame from {tsv_file}")
+            except Exception as e:
+                print(f"Error reading {tsv_file}: {str(e)}")
+        else:
+            print(f"Warning: File not found: {tsv_file}")
+
+    if dfs:
+        combined = pd.concat(dfs, ignore_index=True)
+        print(f"Combined DataFrame has {len(combined)} rows")
+        combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
+    else:
+        print("No data to combine, creating empty output")
+        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
+    """
+}
 
 workflow {
     // Create dataset channels
@@ -768,7 +814,8 @@ workflow PROCESS_DATASET {
                     pfamDomain: protein_config.pfamDomain,
                     subjectDB: protein_config.subjectDB,
                     pasv_align_refs: protein_config.containsKey('pasv_align_refs') ? 
-                        protein_config.pasv_align_refs : null
+                        protein_config.pasv_align_refs : null,
+                    cleaned_fasta: fasta
                 ]
                 tuple(new_meta, fasta)
             }
@@ -830,25 +877,27 @@ workflow PROCESS_DATASET {
         ch_files_to_standardize = ch_combined_phidra
             .mix(ch_pasv_map)
             .map { meta, file -> 
-                println "Processing file for standardization: ${file}"
                 tuple(meta.id, meta, file)
             }
             .groupTuple(by: 0)
             .map { id, metas, files ->
-                println "Grouped files for ${id}: ${files}"
                 tuple(metas[0], files.flatten())  // Flatten the files array
             }
 
-        ch_files_to_standardize.view { 
-            "Files to standardize: meta=${it[0]}, files=${it[1]}" 
-        }
 
         STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+
+        ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
+            .map { meta, file ->
+                file.toAbsolutePath()
+            }
+            .collect()
+        
+        COMBINE_DATASETS(ch_combine_datasets)
 
         DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
 
         ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-            STANDARDIZE_OUTPUTS.out,
-            CLEAN_FASTA_HEADERS.out.fasta
+            STANDARDIZE_OUTPUTS.out
         )
 }

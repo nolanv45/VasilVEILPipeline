@@ -303,11 +303,8 @@ visible_features_list = ['rPolB', 'pPolB', 'piPolB']
 plot_output_dir = "genofeature_plots"
 os.makedirs(plot_output_dir, exist_ok=True)
 
-visible_features_list = [
-    'rPolB',
-    'pPolB',
-    'piPolB'
-]
+visible_features_list = "${params.selected_genofeatures.join(',')}".split(',')
+selected_datasets = "${params.embedding_datasets}".split(',')
 
 
 for feature in visible_features_list:
@@ -344,8 +341,9 @@ for feature in visible_features_list:
 
     # Plot all points as faded background
     for eid, idx in embedding_id_to_index.items():
-        x, y = embedding_2d[idx]
-        ax.scatter(x, y, c="#808080", marker="o", s=10, alpha=0.3, zorder=0)
+        if eid not in context_set and eid not in highlight_set:
+            x, y = embedding_2d[idx]
+            ax.scatter(x, y, c="#808080", marker="o", s=10, alpha=0.3, zorder=0)
 
 
     # Plot context points with metadata-driven style
@@ -363,7 +361,7 @@ for feature in visible_features_list:
                 marker = "o"
             ax.scatter(
                 embedding_2d[idx, 0], embedding_2d[idx, 1],
-                c=color, marker=marker, s=10, alpha=0.5, zorder=1
+                c=color, marker=marker, s=10, alpha=0.8, zorder=1, edgecolor='black', linewidths=0.5
             )
 
     # Plot highlighted points with metadata-driven style
@@ -380,7 +378,7 @@ for feature in visible_features_list:
                 marker = "o"
             ax.scatter(
                 embedding_2d[idx, 0], embedding_2d[idx, 1],
-                c=color, marker=marker, s=30, alpha=0.8, zorder=2, edgecolor='black', linewidths=0.5
+                c=color, marker=marker, s=10, alpha=0.8, zorder=2, edgecolor='black', linewidths=0.5
             )
 
     ax.set_xticks([])
@@ -401,23 +399,70 @@ for feature in visible_features_list:
     plt.savefig(os.path.join(plot_output_dir, f"umap_{feature}_recolor_plot.png"), dpi=600, bbox_inches="tight")
     plt.close()
 
-    # Legend on the side
-   # feature_set = set(gf for _, gf, _ in embedding_info)
-   # feature_handles = []
-   # for feature in metadata_df["genofeature"]:
-    #    if feature in feature_set:
-    #        color = color_map.get(feature, "#808080")
-    #        marker = marker_map.get(feature, ".")
-    #        display_name = display_map.get(feature, feature)
-    #        handle = mlines.Line2D([], [], color=color,
-     #                              marker=marker, linestyle="None",
-    #                               markersize=8, label=display_name)
-    #        feature_handles.append(handle)
- #   ax.legend(handles=feature_handles, loc='center left', bbox_to_anchor=(1.02, 0.5),
-    #          frameon=False, fontsize=10, title="Genofeatures", title_fontsize=12)
+    # --------- PER-DATASET PLOTS ---------
+    # Build mapping from embedding_id to dataset
+    embedding_to_dataset = {}
+    for _, row in module_df.iterrows():
+        for gf in genofeature_cols:
+            eid = row[gf]
+            if pd.notnull(eid) and str(eid).strip():
+                embedding_to_dataset[eid] = row['dataset']
 
-    # Save plot
+    # Get all unique datasets for this feature
+    datasets_for_feature = sorted({embedding_to_dataset[eid] for eid in all_eids if eid in embedding_to_dataset})
 
+    for dataset in datasets_for_feature:
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        # Plot connections (same as above)
+        for id1, id2 in connections:
+            if id1 in all_eids and id2 in all_eids:
+                idx1 = embedding_id_to_index.get(id1)
+                idx2 = embedding_id_to_index.get(id2)
+                if idx1 is not None and idx2 is not None:
+                    ax.plot([embedding_2d[idx1, 0], embedding_2d[idx2, 0]],
+                            [embedding_2d[idx1, 1], embedding_2d[idx2, 1]],
+                            color="gray", alpha=0.2, linewidth=0.5, zorder=0)
+
+        # Plot all points, using dataset and context/highlight logic
+        for eid, idx in embedding_id_to_index.items():
+            ds = embedding_to_dataset.get(eid, None)
+            x, y = embedding_2d[idx]
+            if ds == dataset:
+                if eid in highlight_set:
+                    row = metadata_df[metadata_df["genofeature"] == feature]
+                    if not row.empty:
+                        row = row.iloc[0]
+                        color = row["color"]
+                        marker = row["marker"]
+                    else:
+                        color = "#FF0000"
+                        marker = "o"
+                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.8, zorder=2, edgecolor='black', linewidths=0.5)
+                elif eid in context_set:
+                    gf = next((gf for e, gf, _ in embedding_info if e == eid), "unknown")
+                    row = metadata_df[metadata_df["genofeature"] == gf]
+                    if not row.empty:
+                        row = row.iloc[0]
+                        color = row["color"]
+                        marker = row["marker"]
+                    else:
+                        color = "#808080"
+                        marker = "o"
+                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.5, zorder=1, edgecolor='black', linewidths=0.5)
+                else:
+                    # In selected dataset, but not context or highlight
+                    ax.scatter(x, y, c="#B0B0B0", marker="o", s=10, alpha=0.2, zorder=0)
+            else:
+                # Not in selected dataset
+                ax.scatter(x, y, c="#EEEEEE", marker="o", s=10, alpha=0.1, zorder=0)
+
+        ax.set_xticks([])
+        ax.set_yticks([])
+        label = f"{feature} | Dataset: {dataset}"
+        plt.figtext(0.5, 0.01, label, ha='center', va='bottom', fontsize=20)
+        plt.savefig(os.path.join(plot_output_dir, f"umap_{feature}_by_dataset_{dataset}.png"), dpi=600, bbox_inches="tight")
+        plt.close()
 
 # --------- AUTOMATIC TILING ---------
 def tile_images(image_dir, output_file, padding=10):
@@ -481,6 +526,6 @@ workflow {
 
     // MODIFY_CLUSTERS(ch_cluster_dir)
     // ZEROFIVEC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/coordinates/coords", MODIFY_CLUSTERS.out)
-    GENOFEATURE_CENTRIC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/contig_df.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/coordinates/coords/coordinates_nn100_md7.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/coordinates/connections.tsv")
+    GENOFEATURE_CENTRIC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/contig_df.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/coordinates/coords/coordinates_nn100_md7.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/coordinates/connections.tsv")
 
 }

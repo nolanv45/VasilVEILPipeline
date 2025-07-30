@@ -119,7 +119,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 # Tile all plots together
-def load_and_resize_image(filepath, max_width=1200):
+def load_and_resize_image(filepath, max_width=2400):
     try:
         with Image.open(filepath) as img:
             # Calculate new dimensions maintaining aspect ratio
@@ -237,7 +237,7 @@ for umap_file in os.listdir("plots"):
         # coord_df = pd.read_csv(coord_file, sep='\t')
         
         # Generate HDBSCAN plots with different min_cluster_size values
-        for mc in [10, 20, 30, 40]:
+        for mc in ${params.mc}:
             output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
             plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "plots")
 
@@ -269,9 +269,9 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         except (IndexError, ValueError):
             continue
 
-    nn_values = sorted(list(nn_values))  # [75, 100, 125]
+    nn_values = sorted(list(nn_values)) 
     md_values = sorted(list(md_values))
-    mc_values = sorted([10, 20, 30, 40])
+    mc_values = sorted(${params.mc})
 
     # Process each md value separately
     for md in md_values:
@@ -285,11 +285,11 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
             if os.path.exists(umap_path):
                 print(f"Loading UMAP: {umap_file}")
                 img = Image.open(umap_path)
-                if img.size[0] > 1200:
-                    ratio = 1200 / img.size[0]
-                    new_size = (1200, int(img.size[1] * ratio))
-                    img = img.resize(new_size, Image.Resampling.LANCZOS)
-                images_by_row[nn] = [img]  # Start row with UMAP image
+                #if img.size[0] > 1200:
+                 #   ratio = 1200 / img.size[0]
+                  #  new_size = (1200, int(img.size[1] * ratio))
+                   # img = img.resize(new_size, Image.Resampling.LANCZOS)
+                images_by_row[nn] = [img] 
         
         # Then add HDBSCAN images for each nn value
         for nn in nn_values:
@@ -329,7 +329,7 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
 
         # Add main title
-        title = f"UMAP and HDBSCAN Clustering (md={md:.1f})"
+        title = f"UMAP and HDBSCAN Clustering (md={md/10:.1f})"
         bbox = draw.textbbox((0, 0), title, font=font)
         text_width = bbox[2] - bbox[0]
         draw.text((grid_width//2, axis_title_height//2), title, 
@@ -343,8 +343,8 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
                 fill='black', font=font, anchor='mm')
         canvas.paste(x_title_img, (label_width, axis_title_height))
 
-        # Add Y-axis title (Number of Neighbors)
-        y_title = "Number of Neighbors (nn)"
+       
+        y_title = "Nearest Neighbors Value (nn)"
         y_title_img = Image.new('RGBA', (grid_height, axis_title_height), bg_color)
         y_draw = ImageDraw.Draw(y_title_img)
         y_draw.text((grid_height//2, axis_title_height//2), y_title, 
@@ -391,7 +391,7 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         
         # Save the tiled image for this md value
         output_file = f"{output_prefix}_md{md_int}.png"
-        canvas.save(output_file, optimize=True, quality=85)
+        canvas.save(output_file, optimize=True, quality=95, dpi=(600, 600))
         print(f"Saved tiled image for md={md:.1f}: {output_file}")
 
 # Call the function
@@ -441,7 +441,7 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
     # Load pre-generated UMAP coordinates and IDs
     md_int = int(md * 10)
     coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
-    conns_file = os.path.join("${coordinates_dir}", "connections/connections.tsv")
+    conns_file = os.path.join("${coordinates_dir}", "connections.tsv")
 
     try:
         # Load coordinates and their corresponding IDs
@@ -543,8 +543,8 @@ metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
 
 # Generate plots for specified parameters
 legend_handles = None
-for nn in [75, 100, 125]:
-    for md in [0, 0.3, 0.5, 0.7]:
+for nn in ${params.nn}:
+    for md in ${params.md}:
         output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
         handles = plot_umap(module_df, metadata_df, nn, md, output_file)
         if legend_handles is None:
@@ -564,17 +564,16 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
         if base.startswith("umap_nn"):
             parts = base.replace(".png", "").split("_")  # Split on underscore after removing .png
             try:
-                nn_part = parts[1]  # gets "nn125"
+                nn_part = parts[1]  
                 nn = int(nn_part.replace("nn", ""))  # properly removes "nn" prefix
-                md_part = parts[2]  # gets "md5"
+                md_part = parts[2]  
                 md = float(md_part.replace("md", "")) / 10
                 nn_values.add(nn)
                 md_values.add(md)
             except (IndexError, ValueError) as e:
-                print(f"Skipping malformed filename: {filename}")
+                print(f"Skipping filename: {filename}")
                 continue
 
-    # Sort the values
     nn_values = sorted(list(nn_values))
     md_values = sorted(list(md_values))
 
@@ -592,7 +591,7 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
             
             return (nn_values.index(nn), md_values.index(md))
         except (IndexError, ValueError) as e:
-            print(f"Error parsing filename {filename}: {e}")
+            print(f"Error parsing {filename}: {e}")
             return (0, 0)
     
     png_files.sort(key=get_params)
@@ -841,8 +840,8 @@ process GENERATE_COORDINATES {
             groups[contig_id].append(i)
         
         # Generate UMAP for each parameter combination
-        for nn in [75, 100, 125]:
-            for md in [0, 0.3, 0.5, 0.7]:
+        for nn in ${params.nn}:
+            for md in ${params.md}:
                 print(f"Generating UMAP with nn={nn}, md={md}")
                 reducer = umap.UMAP(
                     n_components=2,
@@ -951,10 +950,10 @@ workflow {
     //     ch_embedding_datasets
     // )
 
-    ch_coordinates = GENERATE_COORDINATES(
-        // ch_embeddings
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/embeddings"
-    )
+    // ch_coordinates = GENERATE_COORDINATES(
+    //     // ch_embeddings
+    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
+    // )
 
     ch_module_file = MODULE_FILE(
         ch_filtered_tsv,
@@ -963,15 +962,15 @@ workflow {
 
     // remember to fix the input from coordinates the same way you did to pasv output.
     ch_umap = UMAP_PROJECTION(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        // ch_coordinates,
         ch_filtered_tsv,
         ch_metadata
     )
 
     ch_hbd = HDBSCAN(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        // ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,
         ch_umap.plots
