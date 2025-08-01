@@ -343,7 +343,7 @@ for feature in visible_features_list:
     for eid, idx in embedding_id_to_index.items():
         if eid not in context_set and eid not in highlight_set:
             x, y = embedding_2d[idx]
-            ax.scatter(x, y, c="#808080", marker="o", s=10, alpha=0.3, zorder=0)
+            ax.scatter(x, y, c="#808080", marker="o", s=10, alpha=0.2, zorder=0)
 
 
     # Plot context points with metadata-driven style
@@ -361,7 +361,7 @@ for feature in visible_features_list:
                 marker = "o"
             ax.scatter(
                 embedding_2d[idx, 0], embedding_2d[idx, 1],
-                c=color, marker=marker, s=10, alpha=0.8, zorder=1, edgecolor='black', linewidths=0.5
+                c=color, marker=marker, s=10, alpha=0.8, zorder=1, linewidths=0.5
             )
 
     # Plot highlighted points with metadata-driven style
@@ -378,7 +378,7 @@ for feature in visible_features_list:
                 marker = "o"
             ax.scatter(
                 embedding_2d[idx, 0], embedding_2d[idx, 1],
-                c=color, marker=marker, s=10, alpha=0.8, zorder=2, edgecolor='black', linewidths=0.5
+                c=color, marker=marker, s=10, alpha=0.8, zorder=2, linewidths=0.5
             )
 
     ax.set_xticks([])
@@ -438,7 +438,7 @@ for feature in visible_features_list:
                     else:
                         color = "#FF0000"
                         marker = "o"
-                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.8, zorder=2, edgecolor='black', linewidths=0.5)
+                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.8, zorder=2, linewidths=0.5)
                 elif eid in context_set:
                     gf = next((gf for e, gf, _ in embedding_info if e == eid), "unknown")
                     row = metadata_df[metadata_df["genofeature"] == gf]
@@ -447,16 +447,12 @@ for feature in visible_features_list:
                         color = row["color"]
                         marker = row["marker"]
                     else:
-                        color = "#808080"
+                        color = "#FF0000"
                         marker = "o"
-                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.5, zorder=1, edgecolor='black', linewidths=0.5)
+                    ax.scatter(x, y, c=color, marker=marker, s=10, alpha=0.8, zorder=1, linewidths=0.5)
                 else:
                     # In selected dataset, but not context or highlight
-                    ax.scatter(x, y, c="#B0B0B0", marker="o", s=10, alpha=0.2, zorder=0)
-            else:
-                # Not in selected dataset
-                ax.scatter(x, y, c="#EEEEEE", marker="o", s=10, alpha=0.1, zorder=0)
-
+                    ax.scatter(x, y, c="#808080", marker="o", s=10, alpha=0.2, zorder=0)
         ax.set_xticks([])
         ax.set_yticks([])
         label = f"{feature} | Dataset: {dataset}"
@@ -526,6 +522,6 @@ workflow {
 
     // MODIFY_CLUSTERS(ch_cluster_dir)
     // ZEROFIVEC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/coordinates/coords", MODIFY_CLUSTERS.out)
-    GENOFEATURE_CENTRIC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/contig_df.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/coordinates/coords/coordinates_nn100_md7.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/fourth_test/coordinates/connections.tsv")
+    GENOFEATURE_CENTRIC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/contig_df.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates/coords/coordinates_nn100_md5.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates/connections.tsv")
 
 }

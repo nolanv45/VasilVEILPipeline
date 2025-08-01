@@ -955,10 +955,10 @@ workflow {
     //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
     // )
 
-    ch_module_file = MODULE_FILE(
-        ch_filtered_tsv,
-        ch_metadata
-    )
+    // ch_module_file = MODULE_FILE(
+    //     ch_filtered_tsv,
+    //     ch_metadata
+    // )
 
     // remember to fix the input from coordinates the same way you did to pasv output.
     ch_umap = UMAP_PROJECTION(
