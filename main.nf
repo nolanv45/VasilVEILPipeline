@@ -357,8 +357,6 @@ process PASV_POST {
     stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
     plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
     plt.close()
-
-    # Print summary
     """
 }
 
