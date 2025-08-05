@@ -119,7 +119,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 # Tile all plots together
-def load_and_resize_image(filepath, max_width=1200):
+def load_and_resize_image(filepath, max_width=2400):
     try:
         with Image.open(filepath) as img:
             # Calculate new dimensions maintaining aspect ratio
@@ -138,21 +138,20 @@ def load_and_resize_image(filepath, max_width=1200):
 def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output):
     try:
         md_int = int(md * 10)
-        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.npy")
-        id_file = os.path.join("${coordinates_dir}", f"ids/embedding_ids_nn{nn}_md{md_int}.txt")
-
-        embedding_2d = np.load(coord_file)
-        with open(id_file, 'r') as f:
-            embedding_ids = [line.strip() for line in f]
+        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+        coord_df = pd.read_csv(coord_file, sep='\t')
+        embedding_ids = coord_df['embedding_id'].tolist()
+        embedding_2d = coord_df[['x', 'y']].values
 
         print(f"Loaded coordinates from {coord_file}")
         print(f"Shape: {embedding_2d.shape}, IDs: {len(embedding_ids)}")
 
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
-        id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
+
+        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
+        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
+        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
+        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
       
         labels = hdbscan.HDBSCAN(min_samples=2, min_cluster_size=mc).fit_predict(embedding_2d)
         clustered = (labels >= 0)
@@ -160,7 +159,10 @@ def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration
         cluster_df = pd.DataFrame({
             'embedding_id': embedding_ids,
             'cluster_label': labels,
-            'genofeature': [id_to_genofeature.get(eid, "unknown") for eid in embedding_ids]
+            #'genofeature': [id_to_genofeature.get(eid, "unknown") for eid in embedding_ids]
+            'genofeature': [module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0] 
+                if eid in module_df["normalized_orf_id"].values else "unknown" 
+                for eid in embedding_ids]
         })
 
         cluster_output_path = os.path.join(iteration_output,
@@ -231,11 +233,11 @@ for umap_file in os.listdir("plots"):
         md_int = int(md * 10)
         
         # Load corresponding coordinates
-        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.npy")
-        id_file = os.path.join("${coordinates_dir}", f"ids/embedding_ids_nn{nn}_md{md_int}.txt")
+        # coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+        # coord_df = pd.read_csv(coord_file, sep='\t')
         
         # Generate HDBSCAN plots with different min_cluster_size values
-        for mc in [10, 20, 30, 40]:
+        for mc in ${params.mc}:
             output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
             plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "plots")
 
@@ -267,9 +269,9 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         except (IndexError, ValueError):
             continue
 
-    nn_values = sorted(list(nn_values))  # [75, 100, 125]
+    nn_values = sorted(list(nn_values)) 
     md_values = sorted(list(md_values))
-    mc_values = sorted([10, 20, 30, 40])
+    mc_values = sorted(${params.mc})
 
     # Process each md value separately
     for md in md_values:
@@ -283,11 +285,11 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
             if os.path.exists(umap_path):
                 print(f"Loading UMAP: {umap_file}")
                 img = Image.open(umap_path)
-                if img.size[0] > 1200:
-                    ratio = 1200 / img.size[0]
-                    new_size = (1200, int(img.size[1] * ratio))
-                    img = img.resize(new_size, Image.Resampling.LANCZOS)
-                images_by_row[nn] = [img]  # Start row with UMAP image
+                #if img.size[0] > 1200:
+                 #   ratio = 1200 / img.size[0]
+                  #  new_size = (1200, int(img.size[1] * ratio))
+                   # img = img.resize(new_size, Image.Resampling.LANCZOS)
+                images_by_row[nn] = [img] 
         
         # Then add HDBSCAN images for each nn value
         for nn in nn_values:
@@ -327,7 +329,7 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
 
         # Add main title
-        title = f"UMAP and HDBSCAN Clustering (md={md:.1f})"
+        title = f"UMAP and HDBSCAN Clustering (md={md/10:.1f})"
         bbox = draw.textbbox((0, 0), title, font=font)
         text_width = bbox[2] - bbox[0]
         draw.text((grid_width//2, axis_title_height//2), title, 
@@ -341,8 +343,8 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
                 fill='black', font=font, anchor='mm')
         canvas.paste(x_title_img, (label_width, axis_title_height))
 
-        # Add Y-axis title (Number of Neighbors)
-        y_title = "Number of Neighbors (nn)"
+       
+        y_title = "Nearest Neighbors Value (nn)"
         y_title_img = Image.new('RGBA', (grid_height, axis_title_height), bg_color)
         y_draw = ImageDraw.Draw(y_title_img)
         y_draw.text((grid_height//2, axis_title_height//2), y_title, 
@@ -389,7 +391,7 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
         
         # Save the tiled image for this md value
         output_file = f"{output_prefix}_md{md_int}.png"
-        canvas.save(output_file, optimize=True, quality=85)
+        canvas.save(output_file, optimize=True, quality=95, dpi=(600, 600))
         print(f"Saved tiled image for md={md:.1f}: {output_file}")
 
 # Call the function
@@ -430,59 +432,61 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
-from collections import defaultdict
-import platform
 from PIL import Image, ImageDraw, ImageFont
 
 # Create output directory
 os.makedirs("plots", exist_ok=True)
 
-def parse_embedding_id(embedding_id):
-    parts = embedding_id.split('_')
-    if len(parts) >= 3:
-        return '_'.join(parts[:-3])
-    return embedding_id
-
-def plot_umap(module_df, nn, md, output_file, display_names):
+def plot_umap(module_df, metadata_df, nn, md, output_file):
     # Load pre-generated UMAP coordinates and IDs
     md_int = int(md * 10)
-    coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.npy")
-    id_file = os.path.join("${coordinates_dir}", f"ids/embedding_ids_nn{nn}_md{md_int}.txt")
-    conns_file = os.path.join("${coordinates_dir}", f"connections/connections_nn{nn}_md{md_int}.npy")
+    coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+    conns_file = os.path.join("${coordinates_dir}", "connections.tsv")
 
     try:
         # Load coordinates and their corresponding IDs
-        embedding_2d = np.load(coord_file)
-        with open(id_file, 'r') as f:
-            embedding_ids = [line.strip() for line in f]
+        coord_df = pd.read_csv(coord_file, sep='\t')
+        embedding_ids = coord_df['embedding_id'].tolist()
+        embedding_2d = coord_df[['x', 'y']].values
         
         print(f"Loaded coordinates from {coord_file}")
         print(f"Shape: {embedding_2d.shape}, IDs: {len(embedding_ids)}")
         
         # Prepare metadata mappings
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
-        id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
+        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
+        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
+        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
+        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 
         # Assign colors and markers
         colors = []
         markers = []
         for eid in embedding_ids:
-            genofeature = id_to_genofeature.get(eid, None)
-            colors.append(genofeature_to_color.get(genofeature, "#808080"))
-            marker = genofeature_to_marker.get(genofeature, ".")
+            genofeature = module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0] if eid in module_df["normalized_orf_id"].values else None
+            if genofeature is not None and genofeature in metadata_df["genofeature"].values:
+                color = metadata_df.loc[metadata_df["genofeature"] == genofeature, "color"].iloc[0]
+                marker = metadata_df.loc[metadata_df["genofeature"] == genofeature, "marker"].iloc[0]
+            else:
+                color = "#808080"
+                marker = "."
+            colors.append(color)
             markers.append(marker if pd.notna(marker) else ".")
 
-        # Group by contig ID for connections
-        groups = defaultdict(list)
-        for i, eid in enumerate(embedding_ids):
-            groups[parse_embedding_id(eid)].append(i)
 
         if os.path.exists(conns_file):
-            connections = np.load(conns_file)
-            print(f"Loaded {len(connections)} connections")
+            connections_df = pd.read_csv(conns_file, sep='\t')
+            print(f"Loaded {len(connections_df)} connections")
+            
+            # Create index mapping for connections
+            id_to_idx = {eid: idx for idx, eid in enumerate(embedding_ids)}
+            
+            # Convert connections to index pairs
+            connections = []
+            for _, row in connections_df.iterrows():
+                if row['id1'] in id_to_idx and row['id2'] in id_to_idx:
+                    connections.append([id_to_idx[row['id1']], id_to_idx[row['id2']]])
+            connections = np.array(connections)
         else:
             connections = []
             print("No connections file found")
@@ -492,11 +496,11 @@ def plot_umap(module_df, nn, md, output_file, display_names):
 
         # Draw connections first (background)
         if len(connections) > 0:
-            # Plot all connections at once
-            coords = embedding_2d[connections]
-            ax.plot(coords[:, :, 0].T, coords[:, :, 1].T,
-                   color='#CCCCCC', alpha=0.5, 
-                   linewidth=0.2, zorder=1)
+            for conn in connections:
+                x_coords = [embedding_2d[conn[0]][0], embedding_2d[conn[1]][0]]
+                y_coords = [embedding_2d[conn[0]][1], embedding_2d[conn[1]][1]]
+                ax.plot(x_coords, y_coords, color='#CCCCCC', alpha=0.5, linewidth=0.2, zorder=1)
+
 
         # Plot points
         for coord, color, marker in zip(embedding_2d, colors, markers):
@@ -508,54 +512,45 @@ def plot_umap(module_df, nn, md, output_file, display_names):
         plt.grid(False)
 
         # Create legend handles
-        unique_genofeatures = sorted(set(id_to_genofeature.values()))
+        unique_genofeatures = sorted(metadata_df["genofeature"].unique())
         legend_handles = []
         
         for genofeature in unique_genofeatures:
-            if genofeature in genofeature_to_color and genofeature in genofeature_to_marker:
-                color = genofeature_to_color[genofeature]
-                marker = genofeature_to_marker[genofeature]
-                display_name = genofeature_to_display.get(genofeature, genofeature)
-                
-                handle = mlines.Line2D([], [], 
-                                     color=color,
-                                     marker=marker,
-                                     linestyle='None',
-                                     markersize=8,
-                                     label=display_name)
-                legend_handles.append(handle)
+            row = metadata_df.loc[metadata_df["genofeature"] == genofeature].iloc[0]
+            handle = mlines.Line2D([], [], 
+                                 color=row["color"],
+                                 marker=row["marker"],
+                                 linestyle='None',
+                                 markersize=8,
+                                 label=row["display_name"])
+            legend_handles.append(handle)
 
-        # Save plot without legend
+        # Save plot
         plt.savefig(output_file, dpi=600, bbox_inches="tight")
         plt.close()
         
         return legend_handles
-        
         
     except Exception as e:
         print(f"Error processing plot: {e}")
         print("Available columns in metadata_df:", metadata_df.columns.tolist())
         return False
 
-
-
 # Main execution
 print("Loading metadata...")
 module_df = pd.read_csv("${filtered_tsv}", sep='\\t')
 metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
-display_names = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 
 # Generate plots for specified parameters
 legend_handles = None
-for nn in [75, 100, 125]:
-    for md in [0, 0.3, 0.5, 0.7]:
+for nn in ${params.nn}:
+    for md in ${params.md}:
         output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
-        handles = plot_umap(module_df, nn, md, output_file, display_names)
+        handles = plot_umap(module_df, metadata_df, nn, md, output_file)
         if legend_handles is None:
             legend_handles = handles
 
 from PIL import Image
-import math
 
 def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(255,255,255,255)):
     # Find and sort PNG files
@@ -569,17 +564,16 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
         if base.startswith("umap_nn"):
             parts = base.replace(".png", "").split("_")  # Split on underscore after removing .png
             try:
-                nn_part = parts[1]  # gets "nn125"
+                nn_part = parts[1]  
                 nn = int(nn_part.replace("nn", ""))  # properly removes "nn" prefix
-                md_part = parts[2]  # gets "md5"
+                md_part = parts[2]  
                 md = float(md_part.replace("md", "")) / 10
                 nn_values.add(nn)
                 md_values.add(md)
             except (IndexError, ValueError) as e:
-                print(f"Skipping malformed filename: {filename}")
+                print(f"Skipping filename: {filename}")
                 continue
 
-    # Sort the values
     nn_values = sorted(list(nn_values))
     md_values = sorted(list(md_values))
 
@@ -597,7 +591,7 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
             
             return (nn_values.index(nn), md_values.index(md))
         except (IndexError, ValueError) as e:
-            print(f"Error parsing filename {filename}: {e}")
+            print(f"Error parsing {filename}: {e}")
             return (0, 0)
     
     png_files.sort(key=get_params)
@@ -766,7 +760,6 @@ process GENERATE_COORDINATES {
     
     input:
         path(embeddings)   
-        path(filtered_tsv)
         
     output:
         path "*", emit: coordinates_files
@@ -780,11 +773,12 @@ process GENERATE_COORDINATES {
     import numpy as np
     import umap
     import random
+    import pandas as pd
     from pathlib import Path
 
     # Create output directories
     os.makedirs("coordinates/coords", exist_ok=True)
-    os.makedirs("coordinates/ids", exist_ok=True)
+   
 
     # SET SEED for reproducibility
     os.environ['PYTHONHASHSEED'] = '42'
@@ -846,8 +840,8 @@ process GENERATE_COORDINATES {
             groups[contig_id].append(i)
         
         # Generate UMAP for each parameter combination
-        for nn in [75, 100, 125]:
-            for md in [0, 0.3, 0.5, 0.7]:
+        for nn in ${params.nn}:
+            for md in ${params.md}:
                 print(f"Generating UMAP with nn={nn}, md={md}")
                 reducer = umap.UMAP(
                     n_components=2,
@@ -862,54 +856,52 @@ process GENERATE_COORDINATES {
                 
                 # Save outputs with parameter-specific names
                 md_int = int(md * 10)
-                coord_file = f"coordinates/coords/coordinates_nn{nn}_md{md_int}.npy"
-                id_file = f"coordinates/ids/embedding_ids_nn{nn}_md{md_int}.txt"
+                coord_file = f"coordinates/coords/coordinates_nn{nn}_md{md_int}.tsv"
+
+                coord_df = pd.DataFrame({
+                    'embedding_id': embedding_ids,
+                    'x': coordinates[:, 0],
+                    'y': coordinates[:, 1]
+                })
+                coord_df.to_csv(coord_file, sep='\t', index=False)
                 
-                np.save(coord_file, coordinates)
-                with open(id_file, 'w') as f:
-                    for eid in embedding_ids:
-                        f.write(f"{eid}\\n")
-                
-                connections = []
-                for contig_id, indices in groups.items():
-                    if len(indices) > 1:
-                        for i in range(len(indices) - 1):
-                            for j in range(i + 1, len(indices)):
-                                connections.append((indices[i], indices[j]))
-                if connections:
-                    connections_array = np.array(connections)
-                    os.makedirs("coordinates/connections", exist_ok=True)  # Create connections directory
-                    connections_file = f"coordinates/connections/connections_nn{nn}_md{md_int}.npy"
-                    np.save(connections_file, connections_array)
-    else:
-        print("No embeddings found to process")
-        # Create empty files to satisfy output requirements
-        np.save("coords/empty_coordinates.npy", np.array([]))
-        with open("ids/empty_ids.txt", "w") as f:
-            pass
+        connections = []
+        for contig_id, indices in groups.items():
+            if len(indices) > 1:
+                for i in range(len(indices) - 1):
+                    for j in range(i + 1, len(indices)):
+                        id1 = embedding_ids[indices[i]]
+                        id2 = embedding_ids[indices[j]]
+                        connections.append([id1, id2])
+        if connections:
+            # Save connections as TSV
+            connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
+            connections_file = f"coordinates/connections.tsv"
+            connections_df.to_csv(connections_file, sep='\t', index=False)
 
     """
 }
 
 
 process MODULE_FILE {
-    tag "${meta.id}"
 
     conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}", 
+    publishDir "${params.outdir}", 
         mode: 'copy',
         pattern: "*.tsv"
 
     input:
-    tuple val(meta), path(tsv_file)
+    path(tsv_file)
     path(metadata_file)
 
     output:
-    tuple val(meta), path("contig_df.tsv"), emit: standardized
+    path("contig_df.tsv"), emit: standardized
 
     script:
     """
-    #!/usr/bin/env python3
+#!/usr/bin/env python3
+# will take tsv files that output from each dataset per orf basis.
+# will filter genofeatures based on metadata file only, so user input required
 import pandas as pd
 import glob
 import os
@@ -919,22 +911,27 @@ metadata = pd.read_csv("${metadata_file}", sep='\t')
 genofeatures = metadata['genofeature'].unique()
 
 df = df[df['genofeature'].isin(genofeatures)]
-contig_df = pd.DataFrame({'genome_id': df['genome_id'].unique()})
+contig_df = pd.DataFrame({'contig_id': df['contig_id'].unique()})
 
 for genofeature in genofeatures:
     feature_data = df[df['genofeature'] == genofeature]
     if len(feature_data) > 0:
-        feature_orfs = feature_data.set_index('genome_id')['orf_id']
-        contig_df[genofeature] = contig_df['genome_id'].map(
-            feature_orfs.groupby('genome_id').first()
+        feature_orfs = feature_data.set_index('contig_id')['orf_id']
+        contig_df[genofeature] = contig_df['contig_id'].map(
+            feature_orfs.groupby('contig_id').first()
         )
     else:
         contig_df[genofeature] = None
-genofeature_columns = [col for col in contig_df.columns if col != 'genome_id']
+genofeature_columns = [col for col in contig_df.columns if col != 'contig_id']
 contig_df['module'] = contig_df[genofeature_columns].apply(
     lambda row: '_'.join([col for col, val in zip(genofeature_columns, row) if pd.notna(val)]), 
     axis=1
 )
+contig_df['dataset'] = contig_df['contig_id'].map(
+    df.groupby('contig_id')['dataset'].first()
+)
+cols = ['dataset', 'contig_id'] + genofeature_columns + ['module']
+contig_df = contig_df[cols]
 
 contig_df.to_csv("contig_df.tsv", sep='\t', index=False)
     """
@@ -949,32 +946,31 @@ workflow {
 
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
-    ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets
-    )
+    // ch_embeddings = EMBEDDINGS(
+    //     ch_embedding_datasets
+    // )
 
-    ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings,
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings",
-        ch_filtered_tsv
-    )
+    // ch_coordinates = GENERATE_COORDINATES(
+    //     // ch_embeddings
+    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
+    // )
 
-    ch_module_file = MODULE_FILE(
-        ch_filtered_tsv,
-        ch_metadata
-    )
+    // ch_module_file = MODULE_FILE(
+    //     ch_filtered_tsv,
+    //     ch_metadata
+    // )
 
     // remember to fix the input from coordinates the same way you did to pasv output.
     ch_umap = UMAP_PROJECTION(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        // ch_coordinates,
         ch_filtered_tsv,
         ch_metadata
     )
 
     ch_hbd = HDBSCAN(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/output_test_2/coordinates",
-        ch_coordinates,
+        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        // ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,
         ch_umap.plots
