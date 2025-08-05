@@ -27,6 +27,7 @@ process CLEAN_FASTA_HEADERS {
 process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
+    label 'standard'
     publishDir "${params.outdir}/${meta.id}/phidra",
         mode: 'copy',
         saveAs: { filename ->
@@ -80,7 +81,7 @@ process PHIDRA {
 process PASV {
     tag "${meta.id}:${meta.protein}"
     conda "/home/nolanv/.conda/envs/phidra"
-    cpus 4
+    label 'standard'
     publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
         mode: 'copy',
         pattern: "pasv_output/output/*.tsv"
@@ -146,84 +147,6 @@ process PASV {
     """
 }
 
-// process PASV_POST {
-//     tag "${meta.id}:${meta.protein}"
-//     conda "/home/nolanv/.conda/envs/phidra"
-//     publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
-//         mode: 'copy',
-//         pattern: "*.{tsv,png}"
-
-//     input:
-//         tuple val(meta), path(pasv_file)
-
-//     output:
-//         tuple val(meta),
-//               path("${meta.protein}_processed.tsv"),
-//               path("${meta.protein}_signature_stats.tsv"),
-//               path("${meta.protein}_signature_distribution.png"),
-//               emit: results
-//         path "versions.yml", emit: versions
-
-//     script:
-//     """
-//     #!/usr/bin/env python3
-//     import pandas as pd
-//     import matplotlib.pyplot as plt
-//     import seaborn as sns
-
-//     def pasv_post(file, protein):
-//         # Process PASV output
-//         df = pd.read_csv(file, sep='\t')
-//         gapless = df[~df['signature'].str.contains('-')].copy()
-//         gapless['orf_length'] = gapless['name'].apply(
-//             lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
-//         )
-
-//         def classify_span(s):
-//             s = s.lower()
-//             if 'both' in s: return 'both'
-//             elif 'start' in s: return 'start'
-//             elif 'end' in s: return 'end'
-//             elif 'neither' in s: return 'neither'
-//             return 'unknown'
-
-//         gapless['span_class'] = gapless['spans'].apply(classify_span)
-//         tally = gapless.groupby(['signature', 'span_class']).size().reset_index(name='count')
-
-//         sig_stats = gapless.groupby('signature').agg({
-//             'orf_length': ['count', 'mean']
-//         }).reset_index()
-//         sig_stats.columns = ['signature', 'count', 'mean_length']
-//         sig_stats['protein'] = protein
-        
-//         return gapless, tally, sig_stats
-
-//     def plot_boxplots(df, tally, output_file, protein):
-//         plt.figure(figsize=(12, 6))
-//         sns.boxplot(data=df, x='signature', y='orf_length')
-//         plt.xticks(rotation=45)
-//         plt.title(f"{protein} Length Distribution by Signature")
-//         plt.tight_layout()
-//         plt.savefig(output_file)
-//         plt.close()
-
-//     # Process the PASV file
-//     processed_df, tally, sig_stats = pasv_post("${pasv_file}", "${meta.protein}")
-
-//     # Save results
-//     processed_df.to_csv("${meta.protein}_processed.tsv", sep='\t', index=False)
-//     sig_stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\t', index=False)
-//     plot_boxplots(processed_df, tally, "${meta.protein}_signature_distribution.png", "${meta.protein}")
-
-//     with open("versions.yml", "w") as f:
-//         f.write(f'''
-// "${task.process}":
-//     python: {pd.__version__}
-//     pandas: {pd.__version__}
-//     matplotlib: {plt.__version__}
-// ''')
-//     """
-// }
 
 process ANALYZE_AND_PLOT {
     tag "${meta.id}"
@@ -259,7 +182,7 @@ process ANALYZE_AND_PLOT {
     # Calculate ORF length if not present
     if 'ORF_length' not in df.columns:
         df['ORF_length'] = df['orf_id'].apply(
-            lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
+            lambda x: (abs(int(x.split('_')[-3]) - int(x.split('_')[-2])) + 1) // 3
         )
 
     # Generate basic statistics
@@ -434,8 +357,6 @@ process PASV_POST {
     stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
     plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
     plt.close()
-
-    # Print summary
     """
 }
 
@@ -451,70 +372,79 @@ process STANDARDIZE_OUTPUTS {
     tuple val(meta), path(tsv_files)
 
     output:
-    tuple val(meta), path("combined_results.tsv"), emit: standardized
+    tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
 
     script:
     """
     #!/usr/bin/env python3
     import pandas as pd
-    import glob
     import os
 
-    print("Processing input files:", "${tsv_files}".split())
-    
-    # Initialize empty list to store DataFrames
+    required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
     dfs = []
-    
-    # Process each input file
+
+    print(f"Processing files for ${meta.id}: {repr('${tsv_files}'.split())}")
+
     for tsv_file in "${tsv_files}".split():
         if not os.path.exists(tsv_file):
             print(f"File not found: {tsv_file}")
             continue
-            
-        print(f"Reading file: {tsv_file}")
-        df = pd.read_csv(tsv_file, sep='\\t')
-        
-        # Detect if this is a PASV format file by checking columns
-        pasv_columns = ['name', 'signature', 'spans']
-        is_pasv = all(col in df.columns for col in pasv_columns)
-        
-        if is_pasv:
-            print(f"Converting PASV format file: {tsv_file}")
-            protein = os.path.basename(tsv_file).split('_')[0]
-            
-            # Convert PASV format to standard format
-            standardized = pd.DataFrame({
-                'genome_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
-                'orf_id': df['name'],
-                'identified': 'PASV',
-                'genofeature': df['signature'],
-                'protein': protein,
-                'dataset': '${meta.id}'
-            })
-            print(f"Converted {len(standardized)} PASV entries")
-            dfs.append(standardized)
-        else:
-            # Verify standard format
-            standard_columns = ['genome_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
-            if all(col in df.columns for col in standard_columns):
-                print(f"Adding standard format file: {tsv_file}")
-                dfs.append(df)
-            else:
-                print(f"Warning: File {tsv_file} has unexpected format. Columns: {df.columns.tolist()}")
-        
-        print(f"Processed {len(df)} rows from {tsv_file}")
 
-    # Combine all DataFrames if any were read
+        print(f"Reading file: {tsv_file}")
+        try:
+            df = pd.read_csv(tsv_file, sep='\\t')
+            print(f"Columns in {tsv_file}: {df.columns.tolist()}")
+
+            # Detect file type and standardize
+            if 'name' in df.columns and 'signature' in df.columns:  # PASV format
+                print(f"Converting PASV format: {tsv_file}")
+                protein = os.path.basename(tsv_file).split('_')[0]
+                
+                standardized = pd.DataFrame({
+                    'contig_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
+                    'orf_id': df['name'],
+                    'identified': 'PASV',
+                    'genofeature': df['signature'],
+                    'protein': protein,
+                    'dataset': "${meta.id}"
+                })
+                print(f"Converted {len(standardized)} PASV entries")
+                dfs.append(standardized)
+            
+            elif 'genome_id' in df.columns:  # Standard format with old column name
+                print(f"Processing standard format: {tsv_file}")
+                df = df.rename(columns={'genome_id': 'contig_id'})  # Rename the column
+                if 'dataset' not in df.columns:
+                    df['dataset'] = "${meta.id}"
+                dfs.append(df)
+            
+            else:
+                print(f"Warning: Unrecognized format in {tsv_file}")
+                print(f"Found columns: {df.columns.tolist()}")
+                continue
+
+        except Exception as e:
+            print(f"Error processing {tsv_file}: {str(e)}")
+            continue
+
     if dfs:
-        print(f"Combining {len(dfs)} DataFrames")
+        print("Combining DataFrames...")
         combined = pd.concat(dfs, ignore_index=True)
-        print(f"Total rows: {len(combined)}")
-        print("Final column names:", combined.columns.tolist())
-        combined.to_csv("combined_results.tsv", sep='\\t', index=False)
-        print(f"Created combined file with {len(combined)} total rows")
+        
+        # Ensure all required columns exist
+        for col in required_columns:
+            if col not in combined:
+                combined[col] = None
+        
+        # Reorder columns
+        combined = combined[required_columns]
+        
+        print(f"Final combined shape: {combined.shape}")
+        print(f"Final columns: {combined.columns.tolist()}")
+        combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
     else:
-        print("No data to combine")
-        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_results.tsv", sep='\\t', index=False)
+        print("No data to combine, creating empty output")
+        pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
     """
 }
 
@@ -688,13 +618,13 @@ process DUPLICATE_HANDLE {
     
     # Read the input file with proper quoting and correct separator
     df = pd.read_csv("${input_file}", sep='\\t')
-    
-    # Find duplicates based on both genome_id and orf_id
-    duplicates = df[df.duplicated(subset=['genome_id', 'orf_id'], keep=False)]
+
+    # Find duplicates based on both contig_id and orf_id
+    duplicates = df[df.duplicated(subset=['contig_id', 'orf_id'], keep=False)]
     
     # Sort duplicates for better readability
-    duplicates = duplicates.sort_values(['genome_id', 'orf_id'])
-    
+    duplicates = duplicates.sort_values(['contig_id', 'orf_id'])
+
     # Save duplicates with tab separator
     duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
     
@@ -723,21 +653,23 @@ process COMBINE_PHIDRA_TSV {
     import pandas as pd
     import os
 
-    tsv_files = "${tsv_files}".split()  // Convert space-separated string to list
-    print(f"Processing {len(tsv_files)} TSV files")
 
     dfs = []
-    for tsv_file in tsv_files:
+    for tsv_file in "${tsv_files}".split():
         if os.path.exists(tsv_file):
             print(f"Reading file: {tsv_file}")
             try:
                 df = pd.read_csv(tsv_file, sep='\\t')
-                dfs.append(df)
-                print(f"Added {len(df)} rows from {tsv_file}")
+                if not df.empty:
+                    dfs.append(df)
+                    print(f"Added {len(df)} rows from {tsv_file}")
+                else:
+                    print(f"Warning: Empty DataFrame from {tsv_file}")
             except Exception as e:
                 print(f"Error reading {tsv_file}: {str(e)}")
         else:
             print(f"Warning: File not found: {tsv_file}")
+
 
     if dfs:
         combined = pd.concat(dfs, ignore_index=True)
@@ -757,7 +689,6 @@ process SPLIT_BY_GENOFEATURE {
 
     input:
         tuple val(meta), path(filtered_tsv)
-        tuple val(meta), path(input_fasta)
 
     output:
         tuple val(meta), path("files_for_embeddings"), emit: fastas_for_embeddings
@@ -772,7 +703,7 @@ process SPLIT_BY_GENOFEATURE {
     # Create the base output directory
     os.makedirs("files_for_embeddings", exist_ok=True)
     df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${input_fasta}", "fasta"))
+    seq_dict = SeqIO.to_dict(SeqIO.parse("${meta.cleaned_fasta}", "fasta"))
 
     # Group by protein and genofeature
     for protein in df['protein'].unique():
@@ -801,6 +732,52 @@ process SPLIT_BY_GENOFEATURE {
     """
 }
 
+process COMBINE_DATASETS {
+
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}",
+        mode: 'copy',
+        pattern: "*.tsv"
+
+    input:
+        path(tsv_files)
+
+    output:
+        path "combined_datasets.tsv", emit: combined
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import pandas as pd
+    import os
+
+    dfs = []
+    input_files = "${tsv_files}".split()
+
+    for tsv_file in input_files:
+        if os.path.exists(tsv_file):
+            print(f"Reading file: {tsv_file}")
+            try:
+                df = pd.read_csv(tsv_file, sep='\\t')
+                if not df.empty:
+                    dfs.append(df)
+                    print(f"Added {len(df)} rows from {tsv_file}")
+                else:
+                    print(f"Warning: Empty DataFrame from {tsv_file}")
+            except Exception as e:
+                print(f"Error reading {tsv_file}: {str(e)}")
+        else:
+            print(f"Warning: File not found: {tsv_file}")
+
+    if dfs:
+        combined = pd.concat(dfs, ignore_index=True)
+        print(f"Combined DataFrame has {len(combined)} rows")
+        combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
+    else:
+        print("No data to combine, creating empty output")
+        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
+    """
+}
 
 workflow {
     // Create dataset channels
@@ -835,7 +812,8 @@ workflow PROCESS_DATASET {
                     pfamDomain: protein_config.pfamDomain,
                     subjectDB: protein_config.subjectDB,
                     pasv_align_refs: protein_config.containsKey('pasv_align_refs') ? 
-                        protein_config.pasv_align_refs : null
+                        protein_config.pasv_align_refs : null,
+                    cleaned_fasta: fasta
                 ]
                 tuple(new_meta, fasta)
             }
@@ -848,7 +826,6 @@ workflow PROCESS_DATASET {
                 pasv: meta.protein.toLowerCase() in ['pola', 'rnr']
                 phidra_only: true
             }
-
 
 
         ch_pasv = ch_branched.pasv
@@ -873,14 +850,14 @@ workflow PROCESS_DATASET {
         ch_phidra_results = ch_annotate
             .mix(ch_phidra_only)
             .map { meta, file -> 
-                tuple(meta.id, meta, file)
+                tuple(meta.id, meta, file)  // Add grouping key
             }
-            .groupTuple(by: 0)
+            .groupTuple(by: 0)  // Group by dataset ID
             .map { id, metas, files ->
-                tuple(metas[0], files) 
+                tuple(metas[0], files.flatten())  // Flatten the files array
             }
 
-        COMBINE_PHIDRA_TSV(ch_phidra_results)
+        COMBINE_PHIDRA_TSV(ch_phidra_results).view()
 
         ANALYZE_AND_PLOT(COMBINE_PHIDRA_TSV.out.combined)
 
@@ -889,33 +866,36 @@ workflow PROCESS_DATASET {
             .map { meta, processed_file, stats_file, plot_file ->
                 tuple(meta, processed_file)
             }
-        
 
 
-        ch_files_to_standardize = Channel.empty()
-        if (COMBINE_PHIDRA_TSV.out.combined) {
-            ch_files_to_standardize = ch_files_to_standardize.mix(COMBINE_PHIDRA_TSV.out.combined)
-        }
-        if (ch_pasv_map) {
-            ch_files_to_standardize = ch_files_to_standardize.mix(ch_pasv_map)
-        }
 
-        ch_files_to_standardize = ch_files_to_standardize
+        ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
+        ch_pasv_map = ch_pasv_map ?: Channel.empty()
+
+        ch_files_to_standardize = ch_combined_phidra
+            .mix(ch_pasv_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }
             .groupTuple(by: 0)
             .map { id, metas, files ->
-                tuple(metas[0], files) 
+                tuple(metas[0], files.flatten())  // Flatten the files array
             }
-            .view()
+
 
         STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+
+        ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
+            .map { meta, file ->
+                file.toAbsolutePath()
+            }
+            .collect()
+        
+        COMBINE_DATASETS(ch_combine_datasets)
 
         DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
 
         ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-            STANDARDIZE_OUTPUTS.out,
-            CLEAN_FASTA_HEADERS.out.fasta
+            STANDARDIZE_OUTPUTS.out
         )
 }
