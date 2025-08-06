@@ -777,7 +777,7 @@ process GENERATE_COORDINATES {
     from pathlib import Path
 
     # Create output directories
-    os.makedirs("coordinates/coords", exist_ok=True)
+    os.makedirs("first_coordinates/coords", exist_ok=True)
    
 
     # SET SEED for reproducibility
@@ -856,7 +856,7 @@ process GENERATE_COORDINATES {
                 
                 # Save outputs with parameter-specific names
                 md_int = int(md * 10)
-                coord_file = f"coordinates/coords/coordinates_nn{nn}_md{md_int}.tsv"
+                coord_file = f"first_coordinates/coords/coordinates_nn{nn}_md{md_int}.tsv"
 
                 coord_df = pd.DataFrame({
                     'embedding_id': embedding_ids,
@@ -873,69 +873,14 @@ process GENERATE_COORDINATES {
                         id1 = embedding_ids[indices[i]]
                         id2 = embedding_ids[indices[j]]
                         connections.append([id1, id2])
-        if connections:
-            # Save connections as TSV
-            connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
-            connections_file = f"coordinates/connections.tsv"
-            connections_df.to_csv(connections_file, sep='\t', index=False)
+        # Save connections as TSV
+        connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
+        connections_file = f"first_coordinates/connections.tsv"
+        connections_df.to_csv(connections_file, sep='\t', index=False)
 
     """
 }
 
-
-process MODULE_FILE {
-
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-
-    input:
-    path(tsv_file)
-    path(metadata_file)
-
-    output:
-    path("contig_df.tsv"), emit: standardized
-
-    script:
-    """
-#!/usr/bin/env python3
-# will take tsv files that output from each dataset per orf basis.
-# will filter genofeatures based on metadata file only, so user input required
-import pandas as pd
-import glob
-import os
-
-df = pd.read_csv("${tsv_file}", sep='\t')
-metadata = pd.read_csv("${metadata_file}", sep='\t')
-genofeatures = metadata['genofeature'].unique()
-
-df = df[df['genofeature'].isin(genofeatures)]
-contig_df = pd.DataFrame({'contig_id': df['contig_id'].unique()})
-
-for genofeature in genofeatures:
-    feature_data = df[df['genofeature'] == genofeature]
-    if len(feature_data) > 0:
-        feature_orfs = feature_data.set_index('contig_id')['orf_id']
-        contig_df[genofeature] = contig_df['contig_id'].map(
-            feature_orfs.groupby('contig_id').first()
-        )
-    else:
-        contig_df[genofeature] = None
-genofeature_columns = [col for col in contig_df.columns if col != 'contig_id']
-contig_df['module'] = contig_df[genofeature_columns].apply(
-    lambda row: '_'.join([col for col, val in zip(genofeature_columns, row) if pd.notna(val)]), 
-    axis=1
-)
-contig_df['dataset'] = contig_df['contig_id'].map(
-    df.groupby('contig_id')['dataset'].first()
-)
-cols = ['dataset', 'contig_id'] + genofeature_columns + ['module']
-contig_df = contig_df[cols]
-
-contig_df.to_csv("contig_df.tsv", sep='\t', index=False)
-    """
-}
 
 
 
@@ -953,11 +898,6 @@ workflow {
     // ch_coordinates = GENERATE_COORDINATES(
     //     // ch_embeddings
     //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
-    // )
-
-    // ch_module_file = MODULE_FILE(
-    //     ch_filtered_tsv,
-    //     ch_metadata
     // )
 
     // remember to fix the input from coordinates the same way you did to pasv output.
