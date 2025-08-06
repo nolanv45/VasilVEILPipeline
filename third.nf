@@ -1,5 +1,197 @@
 nextflow.enable.dsl=2
 
+process GENERATE_COORDINATES_2 {
+    publishDir "${params.outdir}/second_coordinates",
+        mode: 'copy'
+        
+    label 'gpu'  
+    conda "/home/nolanv/.conda/envs/esm-umap"
+    
+    memory { 50.GB }
+    
+    input:
+        path(embeddings)   
+        
+    output:
+        path "second_coordinates/coordinates_nn*.tsv", emit: coordinates_tsv
+        path "second_coordinates/connections.tsv", emit: connections_tsv
+        
+    script:
+    def selected_list = params.selected_genofeatures_2.collect { "\'${it}\'" }.join(', ')
+    """
+    #!/usr/bin/env python3
+    import os
+    import torch
+    import numpy as np
+    import umap
+    import random
+    import pandas as pd
+    from pathlib import Path
+
+    # Create output directories
+    os.makedirs("second_coordinates", exist_ok=True)
+   
+    # SET SEED for reproducibility
+    os.environ['PYTHONHASHSEED'] = '42'
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
+    def load_embedding(file_path):
+        try:
+            embedding_data = torch.load(file_path, map_location='cpu')
+            embedding = embedding_data["mean_representations"][36].numpy()
+            embedding_id = embedding_data.get("label")
+            return embedding, embedding_id
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            return None, None
+
+    def find_pt_files(base_dir):
+        pt_files = []
+        for root, _, files in os.walk(base_dir):
+            if 'batch_0' in root:
+                for file in files:
+                    if file.endswith('.pt'):
+                        pt_files.append(os.path.join(root, file))
+        return pt_files
+
+    # Load embeddings
+    embeddings = []
+    embedding_ids = []
+    
+    # Find all .pt files
+    pt_files = find_pt_files("${embeddings}")
+    print(f"Found {len(pt_files)} .pt files")
+    
+    # Process each .pt file
+    selected_subdirs = [${selected_list}]
+    for file_path in pt_files:
+        genofeature = Path(file_path).parent.parent.name
+        print(genofeature)
+        if genofeature.lower() in [s.lower() for s in selected_subdirs]:
+            print(f"Processing: {file_path}")
+            embedding, embedding_id = load_embedding(file_path)
+            if embedding is not None and embedding_id is not None:
+                embeddings.append(embedding)
+                embedding_ids.append(embedding_id)
+                print(f"Successfully loaded embedding from {file_path}")
+
+    if len(embeddings) > 0:
+        print(f"Processing {len(embeddings)} embeddings")
+        embeddings = np.stack(embeddings)
+
+        groups = {}
+        for i, eid in enumerate(embedding_ids):
+            contig_id = '_'.join(eid.split('_')[:-3])  # Parse embedding ID
+            if contig_id not in groups:
+                groups[contig_id] = []
+            groups[contig_id].append(i)
+        
+        # Generate UMAP for each parameter combination
+        nn = ${params.final_nn}
+        md = ${params.final_md}
+
+
+        print(f"Generating UMAP with nn={nn}, md={md}")
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=nn,
+            min_dist=md,
+            metric='cosine',
+            random_state=42,
+            transform_seed=42,
+            n_epochs=200
+        )
+        coordinates = reducer.fit_transform(embeddings)
+        
+        md_int = int(md * 10)
+        coord_file = f"second_coordinates/coordinates_nn{nn}_md{md_int}.tsv"
+
+        coord_df = pd.DataFrame({
+            'embedding_id': embedding_ids,
+            'x': coordinates[:, 0],
+            'y': coordinates[:, 1]
+        })
+        coord_df.to_csv(coord_file, sep='\t', index=False)
+                
+        connections = []
+        for contig_id, indices in groups.items():
+            if len(indices) > 1:
+                for i in range(len(indices) - 1):
+                    for j in range(i + 1, len(indices)):
+                        id1 = embedding_ids[indices[i]]
+                        id2 = embedding_ids[indices[j]]
+                        connections.append([id1, id2])
+        # Save connections as TSV
+        connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
+        connections_file = f"second_coordinates/connections.tsv"
+        connections_df.to_csv(connections_file, sep='\t', index=False)
+    """
+}
+
+process MODULE_FILE {
+    
+    conda "/home/nolanv/.conda/envs/phidra"
+    publishDir "${params.outdir}", 
+        mode: 'copy',
+        pattern: "*.tsv"
+
+    input:
+    path(tsv_file)
+    path(metadata_file)
+
+    output:
+    path("contig_df.tsv"), emit: standardized
+
+    script:
+    def selected_list = params.selected_genofeatures_2.collect { "\'${it}\'" }.join(', ')
+    """
+#!/usr/bin/env python3
+# will take tsv files that output from each dataset per orf basis.
+# will filter genofeatures based on metadata file only, so user input required
+import pandas as pd
+import glob
+import os
+
+df = pd.read_csv("${tsv_file}", sep='\t')
+metadata = pd.read_csv("${metadata_file}", sep='\t')
+genofeatures = []
+for feature in metadata['genofeature']:
+    if feature in [${selected_list}]:
+        genofeatures.append(feature)
+
+df = df[df['genofeature'].isin(genofeatures)]
+contig_df = pd.DataFrame({'contig_id': df['contig_id'].unique()})
+
+for genofeature in genofeatures:
+    feature_data = df[df['genofeature'] == genofeature]
+    if len(feature_data) > 0:
+        feature_orfs = feature_data.set_index('contig_id')['orf_id']
+        contig_df[genofeature] = contig_df['contig_id'].map(
+            feature_orfs.groupby('contig_id').first()
+        )
+    else:
+        contig_df[genofeature] = None
+genofeature_columns = [col for col in contig_df.columns if col != 'contig_id']
+contig_df['module'] = contig_df[genofeature_columns].apply(
+    lambda row: '_'.join([col for col, val in zip(genofeature_columns, row) if pd.notna(val)]), 
+    axis=1
+)
+contig_df['dataset'] = contig_df['contig_id'].map(
+    df.groupby('contig_id')['dataset'].first()
+)
+cols = ['dataset', 'contig_id'] + genofeature_columns + ['module']
+contig_df = contig_df[cols]
+
+contig_df.to_csv("contig_df.tsv", sep='\t', index=False)
+    """
+}
+
+
 process MODIFY_CLUSTERS {
     publishDir "${params.outdir}/clusters",
         mode: 'copy'
@@ -304,8 +496,6 @@ plot_output_dir = "genofeature_plots"
 os.makedirs(plot_output_dir, exist_ok=True)
 
 visible_features_list = "${params.selected_genofeatures.join(',')}".split(',')
-selected_datasets = "${params.embedding_datasets}".split(',')
-
 
 for feature in visible_features_list:
     # 1. Find all contigs where any visible_feature is in the module (split by '_')
@@ -518,10 +708,20 @@ print(f"All plots completed!")
 
 workflow {
     ch_cluster_dir = Channel.fromPath(params.clusters_dir)
-    ch_module_tsv = Channel.fromPath(params.second_run)
+    ch_filtered_tsv = Channel.fromPath(params.second_run)
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
+    ch_module_file = MODULE_FILE(
+        ch_filtered_tsv,
+        ch_metadata
+    )
+
+    GENERATE_COORDINATES_2(params.embeddings)
+    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
     // MODIFY_CLUSTERS(ch_cluster_dir)
-    // ZEROFIVEC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/third_test/coordinates/coords", MODIFY_CLUSTERS.out)
-    GENOFEATURE_CENTRIC("/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/contig_df.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates/coords/coordinates_nn100_md5.tsv", "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates/connections.tsv")
+    // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
+
+    GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections)
 
 }
