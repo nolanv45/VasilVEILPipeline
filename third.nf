@@ -188,6 +188,11 @@ cols = ['dataset', 'contig_id'] + genofeature_columns + ['module']
 contig_df = contig_df[cols]
 
 contig_df.to_csv("contig_df.tsv", sep='\t', index=False)
+
+# stats file
+module_counts = contig_df['module'].value_counts().reset_index()
+module_counts.columns = ['module', 'count']
+module_counts.to_csv("module_stats.tsv", sep='\t', index=False)
     """
 }
 

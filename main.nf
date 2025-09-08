@@ -20,6 +20,9 @@ process CLEAN_FASTA_HEADERS {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         seqkit: \$(seqkit version | sed 's/^seqkit v//')
+        conda_env: $(conda info --envs | grep '*' | awk '{print $1}')
+        conda_list: |
+    $(conda list)
     END_VERSIONS
     """
 }
@@ -822,8 +825,8 @@ workflow PROCESS_DATASET {
 
         ch_branched = PHIDRA.out.results
             .branch { meta, fasta, init_search, rec_search -> 
-                annotation: meta.protein.toLowerCase() in ['polb', 'helicase']
-                pasv: meta.protein.toLowerCase() in ['pola', 'rnr']
+                annotation: meta.protein.toLowerCase() in params.tophit_proteins
+                pasv: meta.protein.toLowerCase() in params.pasv_proteins
                 phidra_only: true
             }
 
