@@ -16,14 +16,6 @@ process CLEAN_FASTA_HEADERS {
     seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
     seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
     rm temp.fasta
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        seqkit: \$(seqkit version | sed 's/^seqkit v//')
-        conda_env: $(conda info --envs | grep '*' | awk '{print $1}')
-        conda_list: |
-    $(conda list)
-    END_VERSIONS
     """
 }
 
@@ -44,9 +36,8 @@ process PHIDRA {
 
     output:
         tuple val(meta), 
-              path("*/final_results/pfam_validated_full_protein.fa"), 
-              path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"),
-              path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv"),
+              path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
+              path("*/mmseqs/initial/hits.tsv")
               emit: results
 
     script:
@@ -68,11 +59,11 @@ process PHIDRA {
         -o \$WORK_DIR \\
         -t ${task.cpus}
 
-    if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
-        mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
-        echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
-            "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
-    fi
+   # if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
+     #   mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
+   #     echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
+    #        "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
+    #fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -451,7 +442,6 @@ process STANDARDIZE_OUTPUTS {
     """
 }
 
-
 process PHIDRA_ONLY_SUMMARY {
     tag "${meta.id}:${meta.protein}"
     publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${protein}", 
@@ -500,8 +490,6 @@ process PHIDRA_ONLY_SUMMARY {
     print(f"Processed {len(results)} ORFs with no hits for ${meta.protein}")
     """
 }
-
-
 
 process ANNOTATE_HITS {
     tag "${meta.id}:${meta.protein}"
@@ -829,7 +817,6 @@ workflow PROCESS_DATASET {
                 pasv: meta.protein.toLowerCase() in params.pasv_proteins
                 phidra_only: true
             }
-
 
         ch_pasv = ch_branched.pasv
             .map { meta, fasta, init_search, rec_search ->
