@@ -16,11 +16,6 @@ process CLEAN_FASTA_HEADERS {
     seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
     seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
     rm temp.fasta
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        seqkit: \$(seqkit version | sed 's/^seqkit v//')
-    END_VERSIONS
     """
 }
 
@@ -31,8 +26,9 @@ process PHIDRA {
     publishDir "${params.outdir}/${meta.id}/phidra",
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith("pfam_validated_full_protein.fa")) "validated_sequences/${filename}"
-            else if (filename.contains("_TopHit_Evalue.tsv")) "mmseqs_results/${filename}"
+            if (filename.endsWith("full_proteins.fa")) "validated_sequences/${filename}"
+            else if (filename.contains("hits.tsv")) "mmseqs_results/${filename}"
+            else if (filename == "pfam_validated_merged_report.tsv") "pfam/${filename}"
             else null
         }
 
@@ -41,9 +37,9 @@ process PHIDRA {
 
     output:
         tuple val(meta), 
-              path("*/final_results/pfam_validated_full_protein.fa"), 
-              path("*/mmseqs_results/initial_search/*_TopHit_Evalue.tsv"),
-              path("*/mmseqs_results/recursive_search/*_TopHit_Evalue.tsv"),
+              path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
+              path("*/mmseqs/initial/hits.tsv"),
+              path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
               emit: results
 
     script:
@@ -65,16 +61,115 @@ process PHIDRA {
         -o \$WORK_DIR \\
         -t ${task.cpus}
 
-    if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
-        mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
-        echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
-            "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
-    fi
+   # if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
+     #   mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
+      #  echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
+      #      "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
+   # fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version | sed 's/Python //')
     END_VERSIONS
+    """
+}
+
+process DOMAIN_MATCH {
+    tag "${meta.id}:${meta.protein}"
+    conda "/home/nolanv/.conda/envs/phidra"
+    label 'standard'
+    publishDir "${params.outdir}/${meta.id}/domain_matches/${meta.protein}",
+        mode: 'copy',
+        pattern: "*_domain_matches.tsv"
+
+    input:
+        tuple val(meta), path(fasta), path(pfam_tsv), val(pfam_map)
+
+    output:
+        tuple val(meta), path("${meta.protein}_domain_matches.tsv"), emit: results
+
+    script:
+    def pfam_map_json = groovy.json.JsonOutput.toJson(pfam_map)
+    """
+#!/usr/bin/env python3
+import os
+import json
+import pandas as pd
+from Bio import SeqIO
+
+protein = "${meta.protein}"
+pfam_validated_tsv = "${pfam_tsv}"
+pfam_validated_fasta = "${fasta}"
+output_file = "${meta.protein}_domain_matches.tsv"
+
+# Inline mapping injected from nextflow (PF -> label)
+pfam_map = json.loads('${pfam_map_json}')
+
+# build lookup pfam_id -> label (normalize keys to uppercase)
+pfam_to_label = {}
+for k, v in pfam_map.items():
+    k_up = str(k).upper()
+    v_str = str(v)
+    # handle either key->PF or value->PF styles
+    if k_up.startswith('PF'):
+        pfam_to_label[k_up] = v_str
+    elif str(v).upper().startswith('PF'):
+        pfam_to_label[str(v).upper()] = k
+    else:
+        # fallback - no PF found, just map as provided
+        pfam_to_label[k_up] = v_str
+
+def derive_contig_id(query_id):
+    parts = str(query_id).split('_')
+    if len(parts) > 3:
+        return '_'.join(parts[:-3])
+    return query_id
+
+# Read the Pfam validated report
+try:
+    df = pd.read_csv(pfam_validated_tsv, sep='\\t', engine='python', dtype=str, keep_default_na=False)
+except Exception as e:
+    print(f"ERROR reading {pfam_validated_tsv}: {e}")
+    df = pd.DataFrame(columns=['Query_ID', 'Pfam_IDs'])
+
+out_rows = []
+for _, row in df.iterrows():
+    query = row.get('Query_ID') or row.get('QueryID') or row.get('Query') or ''
+    pfam_ids = row.get('Pfam_IDs') or row.get('Pfam_ID') or ''
+    if not query:
+        continue
+
+    # split all pfam ids, normalize to uppercase, and try to map any of them
+    pfam_list = []
+    if isinstance(pfam_ids, str) and pfam_ids:
+        pfam_list = [p.strip().upper() for p in pfam_ids.split('|') if p.strip()]
+
+    genofeature_label = None
+    for pid in pfam_list:
+        if pid in pfam_to_label:
+            genofeature_label = pfam_to_label[pid]
+            break
+
+    # fallback: if no mapped label, use first pfam id (or empty)
+    if not genofeature_label:
+        genofeature_label = pfam_list[0] if pfam_list else ''
+    # fallback: if no mapped label, use the protein name
+    if not genofeature_label:
+        genofeature_label = protein
+
+    contig_id = derive_contig_id(query)
+
+    out_rows.append({
+        'contig_id': contig_id,
+        'orf_id': query,
+        'identified': 'domain_match',
+        'genofeature': genofeature_label,
+        'protein': protein
+    })
+
+out_df = pd.DataFrame(out_rows, columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein'])
+out_df.to_csv(output_file, sep='\\t', index=False)
+print(f"Wrote {len(out_df)} domain matches to {output_file}")
     """
 }
 
@@ -360,6 +455,94 @@ process PASV_POST {
     """
 }
 
+// process STANDARDIZE_OUTPUTS {
+//     tag "${meta.id}"
+
+//     conda "/home/nolanv/.conda/envs/phidra"
+//     publishDir "${params.outdir}/${meta.id}", 
+//         mode: 'copy',
+//         pattern: "*.tsv"
+
+//     input:
+//     tuple val(meta), val(tsv_files)
+
+//     output:
+//     tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
+
+//     script:
+//     """
+//     #!/usr/bin/env python3
+//     import pandas as pd
+//     import os
+
+//     required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
+//     dfs = []
+
+//     print(f"Processing files for ${meta.id}: {repr('${tsv_files}'.split())}")
+
+//     for tsv_file in "${tsv_files}".split():
+//         if not os.path.exists(tsv_file):
+//             print(f"File not found: {tsv_file}")
+//             continue
+
+//         print(f"Reading file: {tsv_file}")
+//         try:
+//             df = pd.read_csv(tsv_file, sep='\\t')
+//             print(f"Columns in {tsv_file}: {df.columns.tolist()}")
+
+//             # Detect file type and standardize
+//             if 'name' in df.columns and 'signature' in df.columns:  # PASV format
+//                 print(f"Converting PASV format: {tsv_file}")
+//                 protein = os.path.basename(tsv_file).split('_')[0]
+                
+//                 standardized = pd.DataFrame({
+//                     'contig_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
+//                     'orf_id': df['name'],
+//                     'identified': 'PASV',
+//                     'genofeature': df['signature'],
+//                     'protein': protein,
+//                     'dataset': "${meta.id}"
+//                 })
+//                 print(f"Converted {len(standardized)} PASV entries")
+//                 dfs.append(standardized)
+            
+//             elif 'genome_id' in df.columns:  # Standard format with old column name
+//                 print(f"Processing standard format: {tsv_file}")
+//                 df = df.rename(columns={'genome_id': 'contig_id'})  # Rename the column
+//                 if 'dataset' not in df.columns:
+//                     df['dataset'] = "${meta.id}"
+//                 dfs.append(df)
+            
+//             else:
+//                 print(f"Warning: Unrecognized format in {tsv_file}")
+//                 print(f"Found columns: {df.columns.tolist()}")
+//                 continue
+
+//         except Exception as e:
+//             print(f"Error processing {tsv_file}: {str(e)}")
+//             continue
+
+//     if dfs:
+//         print("Combining DataFrames...")
+//         combined = pd.concat(dfs, ignore_index=True)
+        
+//         # Ensure all required columns exist
+//         for col in required_columns:
+//             if col not in combined:
+//                 combined[col] = None
+        
+//         # Reorder columns
+//         combined = combined[required_columns]
+        
+//         print(f"Final combined shape: {combined.shape}")
+//         print(f"Final columns: {combined.columns.tolist()}")
+//         combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
+//     else:
+//         print("No data to combine, creating empty output")
+//         pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
+//     """
+// }
+
 process STANDARDIZE_OUTPUTS {
     tag "${meta.id}"
 
@@ -379,75 +562,61 @@ process STANDARDIZE_OUTPUTS {
     #!/usr/bin/env python3
     import pandas as pd
     import os
+    import glob
+    import sys
 
     required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
     dfs = []
 
-    print(f"Processing files for ${meta.id}: {repr('${tsv_files}'.split())}")
+    files = sorted(glob.glob('*.tsv'))
+    print("DEBUG: staged tsv files:", files, file=sys.stderr)
 
-    for tsv_file in "${tsv_files}".split():
-        if not os.path.exists(tsv_file):
-            print(f"File not found: {tsv_file}")
+    for tsv_file in files:
+        print(f"DEBUG: reading {tsv_file}", file=sys.stderr)
+        try:
+            df = pd.read_csv(tsv_file, sep='\\t', dtype=str, keep_default_na=False)
+        except Exception as e:
+            print(f"ERROR reading {tsv_file}: {e}", file=sys.stderr)
             continue
 
-        print(f"Reading file: {tsv_file}")
-        try:
-            df = pd.read_csv(tsv_file, sep='\\t')
-            print(f"Columns in {tsv_file}: {df.columns.tolist()}")
+        cols = set(df.columns.str.lower())
+        # PASV detection
+        if 'name' in df.columns and 'signature' in df.columns:
+            protein = os.path.basename(tsv_file).split('_')[0]
+            standardized = pd.DataFrame({
+                'contig_id': df['name'].apply(lambda x: '_'.join(str(x).split('_')[:-3])),
+                'orf_id': df['name'],
+                'identified': 'PASV',
+                'genofeature': df['signature'],
+                'protein': protein,
+                'dataset': "${meta.id}"
+            })
+            dfs.append(standardized)
 
-            # Detect file type and standardize
-            if 'name' in df.columns and 'signature' in df.columns:  # PASV format
-                print(f"Converting PASV format: {tsv_file}")
-                protein = os.path.basename(tsv_file).split('_')[0]
-                
-                standardized = pd.DataFrame({
-                    'contig_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
-                    'orf_id': df['name'],
-                    'identified': 'PASV',
-                    'genofeature': df['signature'],
-                    'protein': protein,
-                    'dataset': "${meta.id}"
-                })
-                print(f"Converted {len(standardized)} PASV entries")
-                dfs.append(standardized)
-            
-            elif 'genome_id' in df.columns:  # Standard format with old column name
-                print(f"Processing standard format: {tsv_file}")
-                df = df.rename(columns={'genome_id': 'contig_id'})  # Rename the column
-                if 'dataset' not in df.columns:
-                    df['dataset'] = "${meta.id}"
-                dfs.append(df)
-            
-            else:
-                print(f"Warning: Unrecognized format in {tsv_file}")
-                print(f"Found columns: {df.columns.tolist()}")
-                continue
+        elif 'contig_id' in df.columns or 'genome_id' in df.columns:
+            if 'genome_id' in df.columns and 'contig_id' not in df.columns:
+                df = df.rename(columns={'genome_id':'contig_id'})
+            if 'dataset' not in df.columns:
+                df['dataset'] = "${meta.id}"
+            dfs.append(df)
 
-        except Exception as e:
-            print(f"Error processing {tsv_file}: {str(e)}")
+        else:
+            print(f"WARNING: Unrecognized format for {tsv_file}: columns={list(df.columns)}", file=sys.stderr)
             continue
 
     if dfs:
-        print("Combining DataFrames...")
-        combined = pd.concat(dfs, ignore_index=True)
-        
-        # Ensure all required columns exist
+        combined = pd.concat(dfs, ignore_index=True, sort=False)
         for col in required_columns:
-            if col not in combined:
+            if col not in combined.columns:
                 combined[col] = None
-        
-        # Reorder columns
         combined = combined[required_columns]
-        
-        print(f"Final combined shape: {combined.shape}")
-        print(f"Final columns: {combined.columns.tolist()}")
         combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
+        print(f"WROTE {len(combined)} rows to ${meta.id}_combined_results.tsv", file=sys.stderr)
     else:
-        print("No data to combine, creating empty output")
+        print("No data to combine, writing empty file", file=sys.stderr)
         pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
     """
 }
-
 
 process PHIDRA_ONLY_SUMMARY {
     tag "${meta.id}:${meta.protein}"
@@ -498,8 +667,6 @@ process PHIDRA_ONLY_SUMMARY {
     """
 }
 
-
-
 process ANNOTATE_HITS {
     tag "${meta.id}:${meta.protein}"
     publishDir "${params.outdir}/${meta.id}/phidra/annotate_hits/${meta.protein}", 
@@ -509,8 +676,7 @@ process ANNOTATE_HITS {
     input:
     tuple val(meta), 
           path(pfam_validated_fasta),
-          path(initial_search, stageAs: 'initial_search.tsv'), 
-          path(recursive_search, stageAs: 'recursive_search.tsv')
+          path(initial_search, stageAs: 'initial_search.tsv')
 
     output:
     tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
@@ -525,7 +691,6 @@ from Bio import SeqIO
 protein = "${meta.protein}"
 pfam_validated_fasta = "${pfam_validated_fasta}"
 file1_path = "initial_search.tsv"
-file2_path = "recursive_search.tsv"
 output_file = "${meta.protein}_annotated_hits.tsv"
 
 def load_validated_ids():
@@ -544,11 +709,8 @@ def parse_contig_orf(query_id):
 def get_signature(target_id):
     return target_id.split("_")[0]
 
-def process_files(file1_path, file2_path, validated_ids):
-    primary_mappings = {}
+def process_files(file1_path, validated_ids):
     results = []
-    unique_file2_orfs = set()
-    file1_queries = set()
     with open(file1_path, "r") as f:
         next(f)
         for line in f:
@@ -556,35 +718,17 @@ def process_files(file1_path, file2_path, validated_ids):
             query_id = parts[0]
             target_id = parts[1]
             if query_id in validated_ids:
-                file1_queries.add(query_id)
                 contig_id, orf_id = parse_contig_orf(query_id)
                 signature = get_signature(target_id)
-                primary_mappings[query_id] = signature
                 results.append((contig_id, orf_id, signature, "Initial"))
-
-    with open(file2_path, "r") as f:
-        next(f)
-        for line in f:
-            parts = line.strip().split("\\t")
-            query_id = parts[0]
-            target_id = parts[1]
-            if query_id in validated_ids:
-                if query_id not in file1_queries:
-                    unique_file2_orfs.add(query_id)
-                if query_id in primary_mappings:
-                    continue
-                if target_id in primary_mappings:
-                    contig_id, orf_id = parse_contig_orf(query_id)
-                    signature = primary_mappings[target_id]
-                    results.append((contig_id, orf_id, signature, "Recursive"))
-    return results, unique_file2_orfs
+    return results
 
 def main():
     print("DEBUG - Current directory:", os.getcwd())
     validated_ids = load_validated_ids()
     print("DEBUG - Files in directory:", os.listdir("."))
-    print("DEBUG - Processing files:", file1_path, file2_path)
-    results, unique_file2_orfs = process_files(file1_path, file2_path, validated_ids)
+    print("DEBUG - Processing files:", file1_path)
+    results = process_files(file1_path, validated_ids)
     with open(output_file, "w") as f:
         f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
         for contig_id, orf_id, signature, identified in results:
@@ -677,7 +821,7 @@ process COMBINE_PHIDRA_TSV {
         combined.to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
     else:
         print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['genome_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
+        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
     """
 }
 
@@ -821,15 +965,15 @@ workflow PROCESS_DATASET {
         PHIDRA(ch_dataset_proteins)
 
         ch_branched = PHIDRA.out.results
-            .branch { meta, fasta, init_search, rec_search -> 
-                annotation: meta.protein.toLowerCase() in ['polb', 'helicase']
-                pasv: meta.protein.toLowerCase() in ['pola', 'rnr']
+            .branch { meta, fasta, init_search, pfam -> 
+                annotation: meta.protein.toLowerCase() in (params.tophit_proteins.collect { it.toLowerCase() })
+                pasv: meta.protein.toLowerCase() in (params.pasv_proteins.collect { it.toLowerCase() })
+                pfam: meta.protein.toLowerCase() in (params.domain_proteins.collect { it.toLowerCase() })
                 phidra_only: true
             }
 
-
         ch_pasv = ch_branched.pasv
-            .map { meta, fasta, init_search, rec_search ->
+            .map { meta, fasta, init_search, pfam ->
                 tuple(
                     meta,
                     fasta,
@@ -842,10 +986,15 @@ workflow PROCESS_DATASET {
 
         PASV_POST(PASV.out.results)
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
+        DOMAIN_MATCH(ch_branched.pfam
+            .map { meta, fasta, init_search, pfam -> 
+                tuple(meta, fasta, pfam, params.pfam_annotation_map)
+            }
+        )
 
         ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
         ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
-
+        
         // Combine channels
         ch_phidra_results = ch_annotate
             .mix(ch_phidra_only)
@@ -857,31 +1006,34 @@ workflow PROCESS_DATASET {
                 tuple(metas[0], files.flatten())  // Flatten the files array
             }
 
-        COMBINE_PHIDRA_TSV(ch_phidra_results).view()
+        COMBINE_PHIDRA_TSV(ch_phidra_results)
 
         ANALYZE_AND_PLOT(COMBINE_PHIDRA_TSV.out.combined)
-
 
         ch_pasv_map = PASV_POST.out
             .map { meta, processed_file, stats_file, plot_file ->
                 tuple(meta, processed_file)
             }
 
-
+        ch_domain_annotate_map = DOMAIN_MATCH.out.results
+            .map { meta, processed_file ->
+                tuple(meta, processed_file)
+            }
 
         ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
         ch_pasv_map = ch_pasv_map ?: Channel.empty()
 
         ch_files_to_standardize = ch_combined_phidra
-            .mix(ch_pasv_map)
+            .mix(ch_pasv_map, ch_domain_annotate_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }
             .groupTuple(by: 0)
             .map { id, metas, files ->
-                tuple(metas[0], files.flatten())  // Flatten the files array
+                def meta0 = metas[0]
+                def files_list = files.flatten().collect { it.toString() }
+                tuple(meta0, files_list)
             }
-
 
         STANDARDIZE_OUTPUTS(ch_files_to_standardize)
 
