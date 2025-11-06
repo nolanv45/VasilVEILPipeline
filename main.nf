@@ -162,7 +162,7 @@ for _, row in df.iterrows():
     out_rows.append({
         'contig_id': contig_id,
         'orf_id': query,
-        'identified': 'domain_match',
+        'identified': 'Domain_Match',
         'genofeature': genofeature_label,
         'protein': protein
     })
@@ -188,28 +188,11 @@ process PASV {
         tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
 
     script:
-    def protein_lower = meta.protein.toLowerCase()
     """
     mkdir -p pasv_output/{input,output,pasv}
 
-    # Map protein names to settings
-    if [ "${protein_lower}" == "pola" ]; then
-        mapped_name="${meta.protein}_putative"
-        roi_start=521
-        roi_end=923
-        cat_sites="668,705,758,762"
-    elif [ "${protein_lower}" == "rnr" ]; then
-        mapped_name="${meta.protein}_putative"
-        roi_start=437
-        roi_end=625
-        cat_sites="437,439,441,462,438"
-    else
-        echo "Error: Unknown protein ${meta.protein}"
-        exit 1
-    fi
-
     # Prepare input files
-    cp "${fasta}" "pasv_output/input/\${mapped_name}.fasta"
+    cp "${fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
     # Setup PASV
@@ -227,13 +210,13 @@ process PASV {
     \${PASV_DIR}/pasv msa \\
         --outdir=pasv_output/output \\
         --force \\
-        --roi-start=\${roi_start} \\
-        --roi-end=\${roi_end} \\
+        --roi-start=${meta.roi_start} \\
+        --roi-end=${meta.roi_end} \\
         --jobs=${task.cpus} \\
         --aligner=mafft \\
-        pasv_output/input/\${mapped_name}.fasta \\
+        pasv_output/input/${meta.mapped_name}.fasta \\
         pasv_output/input/align_refs.fa \\
-        \${cat_sites}
+        ${meta.cat_sites}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -351,6 +334,19 @@ process PASV_POST {
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
+    import json
+    import math
+    import sys
+    import os
+    import re
+
+    raw_expected = '${meta.expected_sigs}'
+    tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
+    expected_sigs = set(t.upper() for t in tokens if t)
+    try:
+        threshold = float(${params.pasv_threshold})
+    except Exception:
+        threshold = 0.01
 
     # Read and process the PASV file
     print(f"Processing PASV file for ${meta.protein}")
@@ -374,6 +370,16 @@ process PASV_POST {
                    else 'neither',
         axis=1
     )
+
+    total_features = len(processed_df)
+    min_count = max(1, math.ceil(total_features * threshold))
+    print(f"Total features: {total_features}, min_count threshold: {min_count}", file=sys.stderr)
+
+    sig_counts = processed_df['signature'].value_counts().to_dict()
+    keep_sigs = set([s for s,c in sig_counts.items() if c >= min_count])
+    keep_sigs |= set(expected_sigs)
+    dropped = sorted([s for s in sig_counts.keys() if s not in keep_sigs])
+    processed_df = processed_df[processed_df['signature'].isin(keep_sigs)].copy()
 
     # Generate statistics
     stats = processed_df.groupby(['signature', 'span_class']).agg({
@@ -454,6 +460,7 @@ process PASV_POST {
     plt.close()
     """
 }
+
 
 // process STANDARDIZE_OUTPUTS {
 //     tag "${meta.id}"
@@ -620,7 +627,7 @@ process STANDARDIZE_OUTPUTS {
 
 process PHIDRA_ONLY_SUMMARY {
     tag "${meta.id}:${meta.protein}"
-    publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${protein}", 
+    publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${meta.protein}", 
         mode: 'copy',
         pattern: "*.tsv"
     conda "/home/nolanv/.conda/envs/phidra"
@@ -654,7 +661,7 @@ process PHIDRA_ONLY_SUMMARY {
         results.append({
             'genome_id': genome_id,
             'orf_id': orf,
-            'identified': 'phidra_only',
+            'identified': 'Phidra_Only',
             'genofeature': protein,  # Empty as specified
             'protein': protein
         })
@@ -720,7 +727,7 @@ def process_files(file1_path, validated_ids):
             if query_id in validated_ids:
                 contig_id, orf_id = parse_contig_orf(query_id)
                 signature = get_signature(target_id)
-                results.append((contig_id, orf_id, signature, "Initial"))
+                results.append((contig_id, orf_id, signature, "Top_Hit_Annotation"))
     return results
 
 def main():
@@ -974,11 +981,21 @@ workflow PROCESS_DATASET {
 
         ch_pasv = ch_branched.pasv
             .map { meta, fasta, init_search, pfam ->
-                tuple(
-                    meta,
-                    fasta,
-                    meta.pasv_align_refs // align_refs is already in meta from earlier
-                )
+                def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
+                def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
+                def roi_start   = settings.roi_start   ?: ''
+                def roi_end     = settings.roi_end     ?: ''
+                def cat_sites   = settings.cat_sites   ?: ''
+                def expected_sigs  = settings.expected_sigs   ?: ''
+    
+                def new_meta = meta + [
+                    mapped_name: mapped_name,
+                    roi_start: roi_start,
+                    roi_end: roi_end,
+                    cat_sites: cat_sites,
+                    expected_sigs: expected_sigs
+                ]
+                tuple(new_meta, fasta, meta.pasv_align_refs)
             }
 
         ANNOTATE_HITS(ch_branched.annotation)
