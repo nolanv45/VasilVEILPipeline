@@ -5,12 +5,13 @@ process EMBEDDINGS {
         mode: 'copy'
         
     label 'gpu'  
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    conda "umap.yml"
     
     memory { 50.GB }
     
     input:
-        val embedding_datasets  // list of datasets to process
+        val embedding_datasets
+        path files_for_embeddings 
         
     output:
         path "*", emit: embeddings_dirs
@@ -30,7 +31,7 @@ process EMBEDDINGS {
     # Process each protein directory
     for dataset in ${datasets_str}; do
         dataset_path="${params.outdir}/\$dataset/"
-        embedding_path="\$dataset_path/files_for_embeddings"
+        embedding_path="${files_for_embeddings}"
 
         for protein_dir in "\$embedding_path"/*; do
             if [ -d "\$protein_dir" ]; then
@@ -89,7 +90,7 @@ process HDBSCAN {
             else null
         }
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    conda "umap.yml"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -409,7 +410,7 @@ process UMAP_PROJECTION {
             else null
         }
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    conda "umap.yml"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -754,7 +755,7 @@ process GENERATE_COORDINATES {
         mode: 'copy'
         
     label 'gpu'  
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    conda "umap.yml"
     
     memory { 50.GB }
     
