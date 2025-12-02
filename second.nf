@@ -11,7 +11,6 @@ process EMBEDDINGS {
     
     input:
         val embedding_datasets
-        path files_for_embeddings 
         
     output:
         path "*", emit: embeddings_dirs
@@ -31,7 +30,7 @@ process EMBEDDINGS {
     # Process each protein directory
     for dataset in ${datasets_str}; do
         dataset_path="${params.outdir}/\$dataset/"
-        embedding_path="${files_for_embeddings}"
+        embedding_path="\$dataset_path/files_for_embeddings"
 
         for protein_dir in "\$embedding_path"/*; do
             if [ -d "\$protein_dir" ]; then
@@ -885,37 +884,37 @@ process GENERATE_COORDINATES {
 
 
 
-workflow {
-    // Create input channels
-    ch_filtered_tsv = Channel.fromPath(params.second_run)
-    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+// workflow {
+//     // Create input channels
+//     ch_filtered_tsv = Channel.fromPath(params.second_run)
+//     ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-    ch_embedding_datasets = Channel.value(params.embedding_datasets)
+//     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
-    // ch_embeddings = EMBEDDINGS(
-    //     ch_embedding_datasets
-    // )
+//     // ch_embeddings = EMBEDDINGS(
+//     //     ch_embedding_datasets
+//     // )
 
-    // ch_coordinates = GENERATE_COORDINATES(
-    //     // ch_embeddings
-    //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
-    // )
+//     // ch_coordinates = GENERATE_COORDINATES(
+//     //     // ch_embeddings
+//     //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
+//     // )
 
-    // remember to fix the input from coordinates the same way you did to pasv output.
-    ch_umap = UMAP_PROJECTION(
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-        // ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata
-    )
+//     // remember to fix the input from coordinates the same way you did to pasv output.
+//     ch_umap = UMAP_PROJECTION(
+//         "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+//         // ch_coordinates,
+//         ch_filtered_tsv,
+//         ch_metadata
+//     )
 
-    ch_hbd = HDBSCAN(
-        "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-        // ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata,
-        ch_umap.plots
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
+//     ch_hbd = HDBSCAN(
+//         "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+//         // ch_coordinates,
+//         ch_filtered_tsv,
+//         ch_metadata,
+//         ch_umap.plots
+//         // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
         
-    )
-}
+//     )
+// }

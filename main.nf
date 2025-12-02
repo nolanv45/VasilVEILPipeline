@@ -17,9 +17,8 @@ SPLIT_BY_GENOFEATURE;} from './first.nf'
 
 workflow SECOND_RUN {
     take:
-        ch_split_by_genofeature
         ch_combined_tsv
-
+        
     main:
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
@@ -27,7 +26,7 @@ workflow SECOND_RUN {
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets, ch_split_by_genofeature
+        ch_embedding_datasets
     )
 
     ch_coordinates = GENERATE_COORDINATES(
@@ -56,30 +55,45 @@ workflow SECOND_RUN {
 
 
 workflow {
+    // build channel of (meta, dataset_path)
+    Channel
+        .fromList(params.datasets.entrySet())
+        .map { entry ->
+            def meta = [ id: entry.key, path: entry.value ]
+            tuple(meta, meta.path)
+        }
+        .set { ch_datasets }
 
-    def files_for_embeddings = "${params.outdir}/files_for_embeddings"
-    def combined_tsv = "${params.outdir}/combined_datasets.tsv"
-    if (files_for_embeddings.isEmpty()) {
-        Channel
-            .fromList(params.datasets.entrySet())
-            .map { entry -> 
-                def meta = [
-                    id: entry.key,      // Dataset identifier
-                    path: entry.value   // Dataset file path
-                ]
-                tuple(meta, meta.path)
-            }
-            .set { ch_datasets }
+    // def branched = ch_datasets.branch { meta ->
+    //     embeddings_exist: file("${params.outdir}/${meta.id}/files_for_embeddings").exists()
+    //     no_embeddings: !file("${params.outdir}/${meta.id}/files_for_embeddings").exists()
+    // }
+
+    // branched.no_embeddings | FIRST_RUN | SECOND_RUN
+
+    // branched.embeddings_exist.map { meta, dataset_path ->
+    //     meta
+    //     file("${params.outdir}/${meta.id}/files_for_embeddings")
+    // } | SECOND_RUN
 
         // Process each dataset through the pipeline
+
+    def anyMissing = params.datasets.any { id, path ->
+        def emb_dir = file("${params.outdir}/${id}/files_for_embeddings")
+        !( emb_dir.exists() && (emb_dir.list()?.length ?: 0) > 0 )
+    }
+
+    if ( anyMissing ) {
+        // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
         ch_datasets | FIRST_RUN | SECOND_RUN
     }
+
     else {
-        SECOND_RUN(
-            Channel.fromPath(files_for_embeddings),
-            Channel.fromPath(combined_tsv)
-        )
+        SECOND_RUN("${params.outdir}/combined_datasets.tsv")
     }
+
+
+
 }
 
 workflow FIRST_RUN {
@@ -204,7 +218,6 @@ workflow FIRST_RUN {
         ch_combined_tsv = COMBINE_DATASETS.out.combined
 
     emit:
-        ch_split_by_genofeature
         ch_combined_tsv
 }
 
