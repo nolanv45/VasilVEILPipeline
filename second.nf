@@ -5,12 +5,12 @@ process EMBEDDINGS {
         mode: 'copy'
         
     label 'gpu'  
-    conda "umap.yml"
-    
+    container "containers/umap/umap.sif"
     memory { 50.GB }
     
     input:
         val embedding_datasets
+        path combined_tsv
         
     output:
         path "*", emit: embeddings_dirs
@@ -89,7 +89,7 @@ process HDBSCAN {
             else null
         }
         
-    conda "umap.yml"
+    container "containers/umap/umap.sif"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -409,7 +409,7 @@ process UMAP_PROJECTION {
             else null
         }
         
-    conda "umap.yml"
+    container "containers/umap/umap.sif"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -754,7 +754,7 @@ process GENERATE_COORDINATES {
         mode: 'copy'
         
     label 'gpu'  
-    conda "umap.yml"
+    container "containers/umap/umap.sif"
     
     memory { 50.GB }
     

@@ -2,7 +2,7 @@ nextflow.enable.dsl=2
 
 process CLEAN_FASTA_HEADERS {
     tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
 
     input:
         tuple val(meta), path(fasta)
@@ -21,7 +21,7 @@ process CLEAN_FASTA_HEADERS {
 
 process PHIDRA {
     tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     label 'standard'
     publishDir "${params.outdir}/${meta.id}/phidra",
         mode: 'copy',
@@ -45,8 +45,7 @@ process PHIDRA {
     script:
     """
     WORK_DIR=\$PWD
-    source /etc/profile.d/conda.sh
-    conda activate /home/nolanv/.conda/envs/phidra
+    # source /etc/profile.d/conda.sh
 
     cd ${params.phidra_dir}
 
@@ -76,7 +75,7 @@ process PHIDRA {
 
 process DOMAIN_MATCH {
     tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     label 'standard'
     publishDir "${params.outdir}/${meta.id}/domain_matches/${meta.protein}",
         mode: 'copy',
@@ -175,7 +174,7 @@ print(f"Wrote {len(out_df)} domain matches to {output_file}")
 
 process PASV {
     tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     label 'standard'
     publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
         mode: 'copy',
@@ -228,7 +227,7 @@ process PASV {
 
 process ANALYZE_AND_PLOT {
     tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
@@ -313,7 +312,7 @@ process ANALYZE_AND_PLOT {
 
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
         mode: 'copy',
         pattern: "*.{tsv,png}"
@@ -465,7 +464,7 @@ process PASV_POST {
 process STANDARDIZE_OUTPUTS {
     tag "${meta.id}"
 
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
@@ -542,7 +541,7 @@ process PHIDRA_ONLY_SUMMARY {
     publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${meta.protein}", 
         mode: 'copy',
         pattern: "*.tsv"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
 
     input:
         tuple val(meta), path(fasta)
@@ -588,6 +587,7 @@ process PHIDRA_ONLY_SUMMARY {
 
 process ANNOTATE_HITS {
     tag "${meta.id}:${meta.protein}"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}/phidra/annotate_hits/${meta.protein}", 
         mode: 'copy',
         pattern: "*_annotated_hits.tsv"
@@ -663,7 +663,7 @@ if __name__ == "__main__":
 process DUPLICATE_HANDLE {
     tag "${meta.id}"
     debug true
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
@@ -700,7 +700,7 @@ process DUPLICATE_HANDLE {
 
 process COMBINE_PHIDRA_TSV {
     tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}/phidra_analysis", 
         mode: 'copy'
 
@@ -747,6 +747,7 @@ process COMBINE_PHIDRA_TSV {
 
 process SPLIT_BY_GENOFEATURE {
     tag "${meta.id}"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}",
         mode: 'copy'
 
@@ -797,7 +798,7 @@ process SPLIT_BY_GENOFEATURE {
 
 process COMBINE_DATASETS {
 
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}",
         mode: 'copy',
         pattern: "*.tsv"

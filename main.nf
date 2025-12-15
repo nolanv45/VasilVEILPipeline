@@ -15,47 +15,12 @@ COMBINE_DATASETS;
 DUPLICATE_HANDLE;
 SPLIT_BY_GENOFEATURE;} from './first.nf'
 
-workflow SECOND_RUN {
-    take:
-        ch_combined_tsv
-        
-    main:
-    ch_filtered_tsv = ch_combined_tsv
-    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC} from './third.nf'
 
-    ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
-    ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets
-    )
-
-    ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
-    )
-
-    // remember to fix the input from coordinates the same way you did to pasv output.
-    ch_umap = UMAP_PROJECTION(
-        // "/mnt/VEIL/users//nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-        ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata
-    )
-
-    ch_hbd = HDBSCAN(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-        ch_coordinates,
-        ch_filtered_tsv,
-        ch_metadata,
-        ch_umap.plots
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
-        
-    )
-}
 
 
 workflow {
-    // build channel of (meta, dataset_path)
     Channel
         .fromList(params.datasets.entrySet())
         .map { entry ->
@@ -64,36 +29,20 @@ workflow {
         }
         .set { ch_datasets }
 
-    // def branched = ch_datasets.branch { meta ->
-    //     embeddings_exist: file("${params.outdir}/${meta.id}/files_for_embeddings").exists()
-    //     no_embeddings: !file("${params.outdir}/${meta.id}/files_for_embeddings").exists()
-    // }
-
-    // branched.no_embeddings | FIRST_RUN | SECOND_RUN
-
-    // branched.embeddings_exist.map { meta, dataset_path ->
-    //     meta
-    //     file("${params.outdir}/${meta.id}/files_for_embeddings")
-    // } | SECOND_RUN
-
-        // Process each dataset through the pipeline
-
     def anyMissing = params.datasets.any { id, path ->
         def emb_dir = file("${params.outdir}/${id}/files_for_embeddings")
-        !( emb_dir.exists() && (emb_dir.list()?.length ?: 0) > 0 )
+        !emb_dir.exists()
     }
-
+    println "anyMissing = ${anyMissing}"
     if ( anyMissing ) {
         // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
-        ch_datasets | FIRST_RUN | SECOND_RUN
-    }
+        def firstRes = FIRST_RUN(ch_datasets)
 
+        SECOND_RUN(firstRes.ch_combined_tsv)
+    }
     else {
         SECOND_RUN("${params.outdir}/combined_datasets.tsv")
     }
-
-
-
 }
 
 workflow FIRST_RUN {
@@ -221,4 +170,66 @@ workflow FIRST_RUN {
         ch_combined_tsv
 }
 
+workflow SECOND_RUN {
+    take:
+        ch_combined_tsv
+        
+    main:
+    ch_filtered_tsv = ch_combined_tsv
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
+    ch_embedding_datasets = Channel.value(params.embedding_datasets)
+
+    ch_embeddings = EMBEDDINGS(
+        ch_embedding_datasets, ch_combined_tsv
+    )
+    // embeddings found, generate new embeddings for these bc didnt find in output file.
+
+    ch_coordinates = GENERATE_COORDINATES(
+        ch_embeddings
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
+    )
+
+    // remember to fix the input from coordinates the same way you did to pasv output.
+    ch_umap = UMAP_PROJECTION(
+        // "/mnt/VEIL/users//nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata
+    )
+
+    ch_hbd = HDBSCAN(
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata,
+        ch_umap.plots
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
+        
+    )
+    emit:
+        ch_combined_tsv
+}
+
+// workflow THIRD_RUN {
+//     take:
+//         ch_combined_tsv
+
+//     main:
+//     ch_filtered_tsv = Channel.fromPath(params.second_run)
+//     ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+//     ch_module_file = MODULE_FILE(
+//         ch_filtered_tsv,
+//         ch_metadata
+//     )
+
+//     GENERATE_COORDINATES_2(params.embeddings)
+//     ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+//     ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+//     MODIFY_CLUSTERS(ch_cluster_dir)
+//     // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
+
+//     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections)
+
+// }
