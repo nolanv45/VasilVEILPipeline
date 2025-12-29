@@ -24,9 +24,6 @@ process EMBEDDINGS {
     
     mkdir -p embeddings
 
-    extract_script="/mnt/VEIL/tools/embeddings/models/extract.py"
-    model_path="/mnt/VEIL/tools/embeddings/models/esm2_t36_3B_UR50D.pt"
-
     # Process each protein directory
     for dataset in ${datasets_str}; do
         dataset_path="${params.outdir}/\$dataset/"
@@ -59,9 +56,8 @@ process EMBEDDINGS {
                                         cp -r "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature" "embeddings/\$dataset/\$protein/"
                                     else
                                         echo "Generating embeddings for \$fasta_base"
-                                        /home/nolanv/.conda/envs/esm-umap/bin/python \\
-                                            "\$extract_script" \\
-                                            "\$model_path" \\
+                                        python3 ${projectDir}/tools/embeddings/extract.py \\
+                                            ${projectDir}/tools/embeddings/esm2_t36_3B_UR50D.pt \\
                                             "\$fasta" \\
                                             "\$output_dir" \\
                                             --repr_layers 36 \\
