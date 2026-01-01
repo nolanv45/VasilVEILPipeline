@@ -16,6 +16,7 @@ process CLEAN_FASTA_HEADERS {
     seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
     seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
     rm temp.fasta
+    #
     """
 }
 
