@@ -1,948 +1,51 @@
 nextflow.enable.dsl=2
 
-process CLEAN_FASTA_HEADERS {
-    tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
+include { EMBEDDINGS; HDBSCAN; GENERATE_COORDINATES; UMAP_PROJECTION } from './second.nf'
+include {CLEAN_FASTA_HEADERS; 
+PHIDRA;
+ANNOTATE_HITS;
+PASV;
+PASV_POST;
+PHIDRA_ONLY_SUMMARY;
+DOMAIN_MATCH;
+COMBINE_PHIDRA_TSV;
+ANALYZE_AND_PLOT;
+STANDARDIZE_OUTPUTS;
+COMBINE_DATASETS;
+DUPLICATE_HANDLE;
+SPLIT_BY_GENOFEATURE;} from './first.nf'
+
+include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC} from './third.nf'
 
-    input:
-        tuple val(meta), path(fasta)
 
-    output:
-        tuple val(meta), path("${meta.id}_cleaned.fasta"), emit: fasta
 
-    script:
-    """
-    # Clean headers
-    seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
-    seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
-    rm temp.fasta
-    #
-    """
-}
-
-process PHIDRA {
-    tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    label 'standard'
-    publishDir "${params.outdir}/${meta.id}/phidra",
-        mode: 'copy',
-        saveAs: { filename ->
-            if (filename.endsWith("full_proteins.fa")) "validated_sequences/${filename}"
-            else if (filename.contains("hits.tsv")) "mmseqs_results/${filename}"
-            else if (filename == "pfam_validated_merged_report.tsv") "pfam/${filename}"
-            else null
-        }
-
-    input:
-        tuple val(meta), path(fasta)
-
-    output:
-        tuple val(meta), 
-              path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
-              path("*/mmseqs/initial/hits.tsv"),
-              path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
-              emit: results
-
-    script:
-    """
-    WORK_DIR=\$PWD
-    source /etc/profile.d/conda.sh
-    conda activate /home/nolanv/.conda/envs/phidra
-
-    cd ${params.phidra_dir}
-
-    INPUT_FASTA=\$WORK_DIR/${fasta}
-
-    python phidra_run.py \\
-        -i \$INPUT_FASTA \\
-        -db ${meta.subjectDB} \\
-        -pfam ${params.pfamDB} \\
-        -ida ${meta.pfamDomain} \\
-        -f ${meta.protein} \\
-        -o \$WORK_DIR \\
-        -t ${task.cpus}
-
-   # if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
-     #   mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
-      #  echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
-      #      "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
-   # fi
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        python: \$(python --version | sed 's/Python //')
-    END_VERSIONS
-    """
-}
-
-process DOMAIN_MATCH {
-    tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    label 'standard'
-    publishDir "${params.outdir}/${meta.id}/domain_matches/${meta.protein}",
-        mode: 'copy',
-        pattern: "*_domain_matches.tsv"
-
-    input:
-        tuple val(meta), path(fasta), path(pfam_tsv), val(pfam_map)
-
-    output:
-        tuple val(meta), path("${meta.protein}_domain_matches.tsv"), emit: results
-
-    script:
-    def pfam_map_json = groovy.json.JsonOutput.toJson(pfam_map)
-    """
-#!/usr/bin/env python3
-import os
-import json
-import pandas as pd
-from Bio import SeqIO
-
-protein = "${meta.protein}"
-pfam_validated_tsv = "${pfam_tsv}"
-pfam_validated_fasta = "${fasta}"
-output_file = "${meta.protein}_domain_matches.tsv"
-
-# Inline mapping injected from nextflow (PF -> label)
-pfam_map = json.loads('${pfam_map_json}')
-
-# build lookup pfam_id -> label (normalize keys to uppercase)
-pfam_to_label = {}
-for k, v in pfam_map.items():
-    k_up = str(k).upper()
-    v_str = str(v)
-    # handle either key->PF or value->PF styles
-    if k_up.startswith('PF'):
-        pfam_to_label[k_up] = v_str
-    elif str(v).upper().startswith('PF'):
-        pfam_to_label[str(v).upper()] = k
-    else:
-        # fallback - no PF found, just map as provided
-        pfam_to_label[k_up] = v_str
-
-def derive_contig_id(query_id):
-    parts = str(query_id).split('_')
-    if len(parts) > 3:
-        return '_'.join(parts[:-3])
-    return query_id
-
-# Read the Pfam validated report
-try:
-    df = pd.read_csv(pfam_validated_tsv, sep='\\t', engine='python', dtype=str, keep_default_na=False)
-except Exception as e:
-    print(f"ERROR reading {pfam_validated_tsv}: {e}")
-    df = pd.DataFrame(columns=['Query_ID', 'Pfam_IDs'])
-
-out_rows = []
-for _, row in df.iterrows():
-    query = row.get('Query_ID') or row.get('QueryID') or row.get('Query') or ''
-    pfam_ids = row.get('Pfam_IDs') or row.get('Pfam_ID') or ''
-    if not query:
-        continue
-
-    # split all pfam ids, normalize to uppercase, and try to map any of them
-    pfam_list = []
-    if isinstance(pfam_ids, str) and pfam_ids:
-        pfam_list = [p.strip().upper() for p in pfam_ids.split('|') if p.strip()]
-
-    genofeature_label = None
-    for pid in pfam_list:
-        if pid in pfam_to_label:
-            genofeature_label = pfam_to_label[pid]
-            break
-
-    # fallback: if no mapped label, use first pfam id (or empty)
-    if not genofeature_label:
-        genofeature_label = pfam_list[0] if pfam_list else ''
-    # fallback: if no mapped label, use the protein name
-    if not genofeature_label:
-        genofeature_label = protein
-
-    contig_id = derive_contig_id(query)
-
-    out_rows.append({
-        'contig_id': contig_id,
-        'orf_id': query,
-        'identified': 'domain_match',
-        'genofeature': genofeature_label,
-        'protein': protein
-    })
-
-out_df = pd.DataFrame(out_rows, columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein'])
-out_df.to_csv(output_file, sep='\\t', index=False)
-print(f"Wrote {len(out_df)} domain matches to {output_file}")
-    """
-}
-
-process PASV {
-    tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    label 'standard'
-    publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
-        mode: 'copy',
-        pattern: "pasv_output/output/*.tsv"
-
-    input:
-        tuple val(meta), path(fasta), path(align_refs)
-
-    output:
-        tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
-
-    script:
-    def protein_lower = meta.protein.toLowerCase()
-    """
-    mkdir -p pasv_output/{input,output,pasv}
-
-    # Map protein names to settings
-    if [ "${protein_lower}" == "pola" ]; then
-        mapped_name="${meta.protein}_putative"
-        roi_start=521
-        roi_end=923
-        cat_sites="668,705,758,762"
-    elif [ "${protein_lower}" == "rnr" ]; then
-        mapped_name="${meta.protein}_putative"
-        roi_start=437
-        roi_end=625
-        cat_sites="437,439,441,462,438"
-    else
-        echo "Error: Unknown protein ${meta.protein}"
-        exit 1
-    fi
-
-    # Prepare input files
-    cp "${fasta}" "pasv_output/input/\${mapped_name}.fasta"
-    cp "${align_refs}" "pasv_output/input/align_refs.fa"
-
-    # Setup PASV
-    PASV_DIR="pasv_output/pasv"
-    if [ ! -f "\${PASV_DIR}/pasv" ]; then
-        mkdir -p "\${PASV_DIR}"
-        cd "\${PASV_DIR}"
-        wget -q https://github.com/mooreryan/pasv/releases/download/2.0.2/pasv-2.0.2-alpine-static.zip
-        unzip pasv-2.0.2-alpine-static.zip
-        chmod 755 pasv
-        cd -
-    fi
-
-    # Run PASV
-    \${PASV_DIR}/pasv msa \\
-        --outdir=pasv_output/output \\
-        --force \\
-        --roi-start=\${roi_start} \\
-        --roi-end=\${roi_end} \\
-        --jobs=${task.cpus} \\
-        --aligner=mafft \\
-        pasv_output/input/\${mapped_name}.fasta \\
-        pasv_output/input/align_refs.fa \\
-        \${cat_sites}
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        pasv: \$(\${PASV_DIR}/pasv --version | sed 's/pasv //')
-    END_VERSIONS
-    """
-}
-
-
-process ANALYZE_AND_PLOT {
-    tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}", 
-        mode: 'copy',
-        saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "phidra_analysis/stats/${filename}"
-            else if (filename.endsWith('.png')) "phidra_analysis/plots/${filename}"
-            else null
-        }
-
-    input:
-        tuple val(meta), path(input_tsv)
-
-    output:
-        tuple val(meta), 
-              path("protein_stats.tsv"),
-              path("length_distribution.png"),
-              emit: results
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    # Read and process input data
-    df = pd.read_csv("${input_tsv}", sep='\\t')
-    print(f"Processing data with {len(df)} entries")
-
-    # Calculate ORF length if not present
-    if 'ORF_length' not in df.columns:
-        df['ORF_length'] = df['orf_id'].apply(
-            lambda x: (abs(int(x.split('_')[-3]) - int(x.split('_')[-2])) + 1) // 3
-        )
-
-    # Generate basic statistics
-    stats = df.groupby('genofeature').agg({
-        'ORF_length': ['count', 'mean', 'min', 'max']
-    }).reset_index()
-    
-    # Flatten column names
-    stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_length']
-    stats = stats.sort_values('genofeature')
-    
-    # Save statistics
-    stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
-
-    # Create plot
-    plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
-    
-    # Create boxplot using seaborn
-    sns.boxplot(data=df, x='ORF_length', y='genofeature', 
-               orient='h', color='skyblue')
-    
-    # Add annotations
-    for i, row in stats.iterrows():
-        # Count annotation (left)
-        plt.annotate(f"N={int(row['count'])}",
-            xy=(row['min_length'], i),
-            xytext=(-10, 0),
-            textcoords='offset points',
-            ha='right', va='center',
-            fontsize=9, color='blue')
-        
-        # Mean annotation (right)
-        plt.annotate(f"Mean={row['mean_length']:.1f}",
-            xy=(row['max_length'], i),
-            xytext=(10, 0),
-            textcoords='offset points',
-            ha='left', va='center',
-            fontsize=9, color='green')
-    
-    plt.title("Length Distribution by genofeature")
-    plt.xlabel("ORF Length (aa)")
-    plt.grid(True, axis='x', linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig("length_distribution.png", bbox_inches='tight', dpi=300)
-    plt.close()
-    """
-}
-
-
-process PASV_POST {
-    tag "${meta.id}:${meta.protein}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
-        mode: 'copy',
-        pattern: "*.{tsv,png}"
-
-    input:
-        tuple val(meta), path(pasv_file)
-
-    output:
-        tuple val(meta),
-              path("${meta.protein}_processed.tsv"),
-              path("${meta.protein}_signature_stats.tsv"),
-              path("${meta.protein}_signature_distribution.png"),
-              emit: results
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    # Read and process the PASV file
-    print(f"Processing PASV file for ${meta.protein}")
-    df = pd.read_csv("${pasv_file}", sep='\\t')
-    print(f"Initial data shape: {df.shape}")
-
-    # Remove signatures with gaps
-    processed_df = df[~df['signature'].str.contains('-')].copy()
-    print(f"After removing gaps: {processed_df.shape}")
-
-    # Calculate ORF length
-    processed_df['orf_length'] = processed_df['name'].apply(
-        lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
-    )
-
-    # Create span classes based on spans_start and spans_end columns
-    processed_df['span_class'] = processed_df.apply(
-        lambda row: 'both' if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
-                   else 'start' if row['spans_start'] == 'Yes'
-                   else 'end' if row['spans_end'] == 'Yes'
-                   else 'neither',
-        axis=1
-    )
-
-    # Generate statistics
-    stats = processed_df.groupby(['signature', 'span_class']).agg({
-        'orf_length': ['count', 'mean', 'std', 'min', 'max']
-    }).reset_index()
-    stats.columns = ['signature', 'span_class', 'count', 'mean_length', 'std_length', 'min_length', 'max_length']
-    
-    # Sort signatures by count for better visualization
-    signature_order = stats.groupby('signature')['count'].sum().sort_values(ascending=True).index
-
-    # Create visualization
-    span_classes = sorted(processed_df['span_class'].unique())
-    n_signatures = len(signature_order)
-    
-    # Set figure dimensions
-    height_per_sig = 0.4
-    fig_height = max(8, n_signatures * height_per_sig)
-    fig_width = len(span_classes) * 12
-    
-    # Create figure
-    fig, axes = plt.subplots(1, len(span_classes), 
-                            figsize=(fig_width, fig_height),
-                            sharey=True)
-    
-    if len(span_classes) == 1:
-        axes = [axes]
-    
-    print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
-    
-    # Plot for each span class
-    for i, span in enumerate(span_classes):
-        ax = axes[i]
-        span_data = processed_df[processed_df['span_class'] == span]
-        
-        if not span_data.empty:
-            # Create boxplot
-            sns.boxplot(data=span_data,
-                       x='orf_length',
-                       y='signature',
-                       order=signature_order,
-                       orient='h',
-                       ax=ax,
-                       color='skyblue')
-
-            # Add statistics
-            span_stats = stats[stats['span_class'] == span]
-            for idx, sig in enumerate(signature_order):
-                sig_stats = span_stats[span_stats['signature'] == sig]
-                if not sig_stats.empty:
-                    # Add count
-                    ax.text(ax.get_xlim()[0], idx, 
-                           f"n={int(sig_stats['count'].iloc[0])}",
-                           ha='right', va='center',
-                           fontsize=8, color='blue')
-                    
-                    # Add mean
-                    if sig_stats['count'].iloc[0] > 0:
-                        ax.text(ax.get_xlim()[1], idx,
-                               f"μ={sig_stats['mean_length'].iloc[0]:.1f}",
-                               ha='left', va='center',
-                               fontsize=8, color='green')
-        
-        ax.set_title(f"Span: {span}")
-        ax.set_xlabel("ORF Length (aa)")
-        ax.grid(True, alpha=0.3)
-        
-        # Ensure y-labels are readable
-        ax.tick_params(axis='y', labelsize=8, pad=40)
-    
-    # Adjust layout
-    plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
-    fig.suptitle(f"${meta.protein} Signature Distribution", fontsize=16, y=1.02)
-    
-    # Save outputs
-    processed_df.to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
-    stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
-    plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
-    plt.close()
-    """
-}
-
-// process STANDARDIZE_OUTPUTS {
-//     tag "${meta.id}"
-
-//     conda "/home/nolanv/.conda/envs/phidra"
-//     publishDir "${params.outdir}/${meta.id}", 
-//         mode: 'copy',
-//         pattern: "*.tsv"
-
-//     input:
-//     tuple val(meta), val(tsv_files)
-
-//     output:
-//     tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
-
-//     script:
-//     """
-//     #!/usr/bin/env python3
-//     import pandas as pd
-//     import os
-
-//     required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
-//     dfs = []
-
-//     print(f"Processing files for ${meta.id}: {repr('${tsv_files}'.split())}")
-
-//     for tsv_file in "${tsv_files}".split():
-//         if not os.path.exists(tsv_file):
-//             print(f"File not found: {tsv_file}")
-//             continue
-
-//         print(f"Reading file: {tsv_file}")
-//         try:
-//             df = pd.read_csv(tsv_file, sep='\\t')
-//             print(f"Columns in {tsv_file}: {df.columns.tolist()}")
-
-//             # Detect file type and standardize
-//             if 'name' in df.columns and 'signature' in df.columns:  # PASV format
-//                 print(f"Converting PASV format: {tsv_file}")
-//                 protein = os.path.basename(tsv_file).split('_')[0]
-                
-//                 standardized = pd.DataFrame({
-//                     'contig_id': df['name'].apply(lambda x: '_'.join(x.split('_')[:-3])),
-//                     'orf_id': df['name'],
-//                     'identified': 'PASV',
-//                     'genofeature': df['signature'],
-//                     'protein': protein,
-//                     'dataset': "${meta.id}"
-//                 })
-//                 print(f"Converted {len(standardized)} PASV entries")
-//                 dfs.append(standardized)
-            
-//             elif 'genome_id' in df.columns:  # Standard format with old column name
-//                 print(f"Processing standard format: {tsv_file}")
-//                 df = df.rename(columns={'genome_id': 'contig_id'})  # Rename the column
-//                 if 'dataset' not in df.columns:
-//                     df['dataset'] = "${meta.id}"
-//                 dfs.append(df)
-            
-//             else:
-//                 print(f"Warning: Unrecognized format in {tsv_file}")
-//                 print(f"Found columns: {df.columns.tolist()}")
-//                 continue
-
-//         except Exception as e:
-//             print(f"Error processing {tsv_file}: {str(e)}")
-//             continue
-
-//     if dfs:
-//         print("Combining DataFrames...")
-//         combined = pd.concat(dfs, ignore_index=True)
-        
-//         # Ensure all required columns exist
-//         for col in required_columns:
-//             if col not in combined:
-//                 combined[col] = None
-        
-//         # Reorder columns
-//         combined = combined[required_columns]
-        
-//         print(f"Final combined shape: {combined.shape}")
-//         print(f"Final columns: {combined.columns.tolist()}")
-//         combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-//     else:
-//         print("No data to combine, creating empty output")
-//         pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-//     """
-// }
-
-process STANDARDIZE_OUTPUTS {
-    tag "${meta.id}"
-
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-
-    input:
-    tuple val(meta), path(tsv_files)
-
-    output:
-    tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
-    import glob
-    import sys
-
-    required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
-    dfs = []
-
-    files = sorted(glob.glob('*.tsv'))
-    print("DEBUG: staged tsv files:", files, file=sys.stderr)
-
-    for tsv_file in files:
-        print(f"DEBUG: reading {tsv_file}", file=sys.stderr)
-        try:
-            df = pd.read_csv(tsv_file, sep='\\t', dtype=str, keep_default_na=False)
-        except Exception as e:
-            print(f"ERROR reading {tsv_file}: {e}", file=sys.stderr)
-            continue
-
-        cols = set(df.columns.str.lower())
-        # PASV detection
-        if 'name' in df.columns and 'signature' in df.columns:
-            protein = os.path.basename(tsv_file).split('_')[0]
-            standardized = pd.DataFrame({
-                'contig_id': df['name'].apply(lambda x: '_'.join(str(x).split('_')[:-3])),
-                'orf_id': df['name'],
-                'identified': 'PASV',
-                'genofeature': df['signature'],
-                'protein': protein,
-                'dataset': "${meta.id}"
-            })
-            dfs.append(standardized)
-
-        elif 'contig_id' in df.columns or 'genome_id' in df.columns:
-            if 'genome_id' in df.columns and 'contig_id' not in df.columns:
-                df = df.rename(columns={'genome_id':'contig_id'})
-            if 'dataset' not in df.columns:
-                df['dataset'] = "${meta.id}"
-            dfs.append(df)
-
-        else:
-            print(f"WARNING: Unrecognized format for {tsv_file}: columns={list(df.columns)}", file=sys.stderr)
-            continue
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True, sort=False)
-        for col in required_columns:
-            if col not in combined.columns:
-                combined[col] = None
-        combined = combined[required_columns]
-        combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-        print(f"WROTE {len(combined)} rows to ${meta.id}_combined_results.tsv", file=sys.stderr)
-    else:
-        print("No data to combine, writing empty file", file=sys.stderr)
-        pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-    """
-}
-
-process PHIDRA_ONLY_SUMMARY {
-    tag "${meta.id}:${meta.protein}"
-    publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${protein}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-    conda "/home/nolanv/.conda/envs/phidra"
-
-    input:
-        tuple val(meta), path(fasta)
-
-    output:
-        tuple val(meta), path("${meta.protein}_phidra_only.tsv"), emit: results
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    
-    protein = "${meta.protein}"
-
-    # Process FASTA file to get ORF information
-    orfs = []
-    current_header = None
-    with open("${fasta}") as f:
-        for line in f:
-            if line.startswith('>'):
-                current_header = line.strip()[1:]
-                orfs.append(current_header)
-    
-    # Create DataFrame with same structure as annotate_top_hits output
-    results = []
-    for orf in orfs:
-        genome_id = '_'.join(orf.split('_')[:-3])
-        results.append({
-            'genome_id': genome_id,
-            'orf_id': orf,
-            'identified': 'phidra_only',
-            'genofeature': protein,  # Empty as specified
-            'protein': protein
-        })
-    
-    # Create and save DataFrame
-    df = pd.DataFrame(results)
-    df.to_csv("${meta.protein}_phidra_only.tsv", sep='\\t', index=False)
-
-    print(f"Processed {len(results)} ORFs with no hits for ${meta.protein}")
-    """
-}
-
-process ANNOTATE_HITS {
-    tag "${meta.id}:${meta.protein}"
-    publishDir "${params.outdir}/${meta.id}/phidra/annotate_hits/${meta.protein}", 
-        mode: 'copy',
-        pattern: "*_annotated_hits.tsv"
-
-    input:
-    tuple val(meta), 
-          path(pfam_validated_fasta),
-          path(initial_search, stageAs: 'initial_search.tsv')
-
-    output:
-    tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
-
-    script:
-    """
-#!/usr/bin/env python3
-import sys
-import os
-from Bio import SeqIO
-
-protein = "${meta.protein}"
-pfam_validated_fasta = "${pfam_validated_fasta}"
-file1_path = "initial_search.tsv"
-output_file = "${meta.protein}_annotated_hits.tsv"
-
-def load_validated_ids():
-    validated_ids = set()
-    with open(pfam_validated_fasta, 'r') as f:
-        for record in SeqIO.parse(f, 'fasta'):
-            validated_ids.add(record.id)
-    print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
-    return validated_ids
-
-def parse_contig_orf(query_id):
-    parts = query_id.split("_")
-    contig_id = "_".join(parts[:-3])
-    return contig_id, query_id
-
-def get_signature(target_id):
-    return target_id.split("_")[0]
-
-def process_files(file1_path, validated_ids):
-    results = []
-    with open(file1_path, "r") as f:
-        next(f)
-        for line in f:
-            parts = line.strip().split("\\t")
-            query_id = parts[0]
-            target_id = parts[1]
-            if query_id in validated_ids:
-                contig_id, orf_id = parse_contig_orf(query_id)
-                signature = get_signature(target_id)
-                results.append((contig_id, orf_id, signature, "Initial"))
-    return results
-
-def main():
-    print("DEBUG - Current directory:", os.getcwd())
-    validated_ids = load_validated_ids()
-    print("DEBUG - Files in directory:", os.listdir("."))
-    print("DEBUG - Processing files:", file1_path)
-    results = process_files(file1_path, validated_ids)
-    with open(output_file, "w") as f:
-        f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
-        for contig_id, orf_id, signature, identified in results:
-            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
-    print(f"Results have been saved to: {output_file}")
-
-if __name__ == "__main__":
-    main()
-    """
-}
-
-
-process DUPLICATE_HANDLE {
-    tag "${meta.id}"
-    debug true
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-
-    input:
-        tuple val(meta), path(input_file)    // Properly declare the input file
-
-    output:
-        tuple val(meta), path("duplicate_orfs.tsv")   // Declare the output file
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    
-    # Read the input file with proper quoting and correct separator
-    df = pd.read_csv("${input_file}", sep='\\t')
-
-    # Find duplicates based on both contig_id and orf_id
-    duplicates = df[df.duplicated(subset=['contig_id', 'orf_id'], keep=False)]
-    
-    # Sort duplicates for better readability
-    duplicates = duplicates.sort_values(['contig_id', 'orf_id'])
-
-    # Save duplicates with tab separator
-    duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
-    
-    # Print summary for debugging
-    print(f"Found {len(duplicates)} duplicate entries")
-    """
-}
-
-
-
-process COMBINE_PHIDRA_TSV {
-    tag "${meta.id}"
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}/${meta.id}/phidra_analysis", 
-        mode: 'copy'
-
-    input:
-    tuple val(meta), path(tsv_files)
-
-    output:
-        tuple val(meta), path('combined_phidra_output.tsv'), emit: combined
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
-
-
-    dfs = []
-    for tsv_file in "${tsv_files}".split():
-        if os.path.exists(tsv_file):
-            print(f"Reading file: {tsv_file}")
-            try:
-                df = pd.read_csv(tsv_file, sep='\\t')
-                if not df.empty:
-                    dfs.append(df)
-                    print(f"Added {len(df)} rows from {tsv_file}")
-                else:
-                    print(f"Warning: Empty DataFrame from {tsv_file}")
-            except Exception as e:
-                print(f"Error reading {tsv_file}: {str(e)}")
-        else:
-            print(f"Warning: File not found: {tsv_file}")
-
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True)
-        print(f"Combined DataFrame has {len(combined)} rows")
-        combined.to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
-    else:
-        print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
-    """
-}
-
-
-process SPLIT_BY_GENOFEATURE {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/${meta.id}",
-        mode: 'copy'
-
-    input:
-        tuple val(meta), path(filtered_tsv)
-
-    output:
-        tuple val(meta), path("files_for_embeddings"), emit: fastas_for_embeddings
-
-    script:
-    """
-    #!/usr/bin/env python3
-    from Bio import SeqIO
-    import pandas as pd
-    import os
-
-    # Create the base output directory
-    os.makedirs("files_for_embeddings", exist_ok=True)
-    df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${meta.cleaned_fasta}", "fasta"))
-
-    # Group by protein and genofeature
-    for protein in df['protein'].unique():
-        protein_df = df[df['protein'] == protein]
-        
-        for genofeature in protein_df['genofeature'].unique():
-            # Create nested directory structure
-            dir_path = os.path.join("files_for_embeddings", protein, genofeature)
-            os.makedirs(dir_path, exist_ok=True)
-            
-            # Filter records for this genofeature
-            genofeature_df = protein_df[protein_df['genofeature'] == genofeature]
-            
-            # Save filtered TSV
-            genofeature_df.to_csv(f"{dir_path}/filtered.tsv", sep='\\t', index=False)
-            
-            # Extract matching sequences
-            matching_seqs = []
-            for orf_id in genofeature_df['orf_id']:
-                if orf_id in seq_dict:
-                    matching_seqs.append(seq_dict[orf_id])
-            
-            # Write matching sequences to FASTA
-            if matching_seqs:
-                SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
-    """
-}
-
-process COMBINE_DATASETS {
-
-    conda "/home/nolanv/.conda/envs/phidra"
-    publishDir "${params.outdir}",
-        mode: 'copy',
-        pattern: "*.tsv"
-
-    input:
-        path(tsv_files)
-
-    output:
-        path "combined_datasets.tsv", emit: combined
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
-
-    dfs = []
-    input_files = "${tsv_files}".split()
-
-    for tsv_file in input_files:
-        if os.path.exists(tsv_file):
-            print(f"Reading file: {tsv_file}")
-            try:
-                df = pd.read_csv(tsv_file, sep='\\t')
-                if not df.empty:
-                    dfs.append(df)
-                    print(f"Added {len(df)} rows from {tsv_file}")
-                else:
-                    print(f"Warning: Empty DataFrame from {tsv_file}")
-            except Exception as e:
-                print(f"Error reading {tsv_file}: {str(e)}")
-        else:
-            print(f"Warning: File not found: {tsv_file}")
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True)
-        print(f"Combined DataFrame has {len(combined)} rows")
-        combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
-    else:
-        print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
-    """
-}
 
 workflow {
-    // Create dataset channels
     Channel
         .fromList(params.datasets.entrySet())
-        .map { entry -> 
-            def meta = [
-                id: entry.key,      // Dataset identifier
-                path: entry.value   // Dataset file path
-            ]
+        .map { entry ->
+            def meta = [ id: entry.key, path: entry.value ]
             tuple(meta, meta.path)
         }
         .set { ch_datasets }
 
-    // Process each dataset through the pipeline
-    ch_datasets | PROCESS_DATASET
+    def anyMissing = params.datasets.any { id, path ->
+        def emb_dir = file("${params.outdir}/${id}/files_for_embeddings")
+        !emb_dir.exists()
+    }
+    println "anyMissing = ${anyMissing}"
+    if ( anyMissing ) {
+        // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
+        def firstRes = FIRST_RUN(ch_datasets)
+
+        SECOND_RUN(firstRes.ch_combined_tsv)
+    }
+    else {
+        SECOND_RUN("${params.outdir}/combined_datasets.tsv")
+    }
 }
 
-
-workflow PROCESS_DATASET {
+workflow FIRST_RUN {
     take:
         ch_dataset
 
@@ -975,11 +78,21 @@ workflow PROCESS_DATASET {
 
         ch_pasv = ch_branched.pasv
             .map { meta, fasta, init_search, pfam ->
-                tuple(
-                    meta,
-                    fasta,
-                    meta.pasv_align_refs // align_refs is already in meta from earlier
-                )
+                def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
+                def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
+                def roi_start   = settings.roi_start   ?: ''
+                def roi_end     = settings.roi_end     ?: ''
+                def cat_sites   = settings.cat_sites   ?: ''
+                def expected_sigs  = settings.expected_sigs   ?: ''
+    
+                def new_meta = meta + [
+                    mapped_name: mapped_name,
+                    roi_start: roi_start,
+                    roi_end: roi_end,
+                    cat_sites: cat_sites,
+                    expected_sigs: expected_sigs
+                ]
+                tuple(new_meta, fasta, meta.pasv_align_refs)
             }
 
         ANNOTATE_HITS(ch_branched.annotation)
@@ -1051,4 +164,72 @@ workflow PROCESS_DATASET {
         ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
             STANDARDIZE_OUTPUTS.out
         )
+        ch_combined_tsv = COMBINE_DATASETS.out.combined
+
+    emit:
+        ch_combined_tsv
 }
+
+workflow SECOND_RUN {
+    take:
+        ch_combined_tsv
+        
+    main:
+    ch_filtered_tsv = ch_combined_tsv
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+    ch_embedding_datasets = Channel.value(params.embedding_datasets)
+
+    ch_embeddings = EMBEDDINGS(
+        ch_embedding_datasets, ch_combined_tsv
+    )
+    // embeddings found, generate new embeddings for these bc didnt find in output file.
+
+    ch_coordinates = GENERATE_COORDINATES(
+        ch_embeddings
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
+    )
+
+    // remember to fix the input from coordinates the same way you did to pasv output.
+    ch_umap = UMAP_PROJECTION(
+        // "/mnt/VEIL/users//nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata
+    )
+
+    ch_hbd = HDBSCAN(
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata,
+        ch_umap.plots
+        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
+        
+    )
+    emit:
+        ch_combined_tsv
+}
+
+// workflow THIRD_RUN {
+//     take:
+//         ch_combined_tsv
+
+//     main:
+//     ch_filtered_tsv = Channel.fromPath(params.second_run)
+//     ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+//     ch_module_file = MODULE_FILE(
+//         ch_filtered_tsv,
+//         ch_metadata
+//     )
+
+//     GENERATE_COORDINATES_2(params.embeddings)
+//     ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+//     ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+//     MODIFY_CLUSTERS(ch_cluster_dir)
+//     // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
+
+//     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections)
+
+// }
