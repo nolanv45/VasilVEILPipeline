@@ -711,22 +711,3 @@ print(f"All plots completed!")
 }
 
 
-workflow {
-    ch_cluster_dir = Channel.fromPath(params.clusters_dir)
-    ch_filtered_tsv = Channel.fromPath(params.second_run)
-    ch_metadata = Channel.fromPath(params.genofeature_metadata)
-
-    ch_module_file = MODULE_FILE(
-        ch_filtered_tsv,
-        ch_metadata
-    )
-
-    GENERATE_COORDINATES_2(params.embeddings)
-    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
-    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
-    // MODIFY_CLUSTERS(ch_cluster_dir)
-    // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
-
-    GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections)
-
-}
