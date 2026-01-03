@@ -12,10 +12,7 @@ process CLEAN_FASTA_HEADERS {
 
     script:
     """
-    # Clean headers
-    seqkit replace -p '>' -r '>' ${fasta} | sed '/^>/ s/\\./-/g' > temp.fasta
-    seqkit seq -w 0 temp.fasta | sed '/^>/! s/\\*//g' > "${meta.id}_cleaned.fasta"
-    rm temp.fasta
+    awk 'BEGIN{RS=">"; ORS=""} NR>1{n=index(\$0, "\\n"); header=substr(\$0,1,n-1); gsub(/\\./, "-", header); seq=substr(\$0,n+1); gsub(/\\n/, "", seq); gsub(/\\*/, "", seq); print ">"header"\\n"seq"\\n"}' ${fasta} > "${meta.id}_cleaned.fasta"
     """
 }
 
@@ -33,7 +30,7 @@ process PHIDRA {
         }
 
     input:
-        tuple val(meta), path(fasta)
+        tuple val(meta), path(fasta), path(subject_db)
 
     output:
         tuple val(meta), 
@@ -53,7 +50,7 @@ process PHIDRA {
 
     python phidra_run.py \\
         -i \$INPUT_FASTA \\
-        -db ${meta.subjectDB} \\
+        -db \$WORK_DIR/${subject_db} \\
         -pfam ${params.pfamDB} \\
         -ida ${meta.pfamDomain} \\
         -f ${meta.protein} \\

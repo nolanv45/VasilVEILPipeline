@@ -11,13 +11,14 @@ process EMBEDDINGS {
     input:
         val embedding_datasets
         path combined_tsv
+        path model_folder
         
     output:
         path "*", emit: embeddings_dirs
         
     script:
-    def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
-    def datasets_str = embedding_datasets.collect { "\"${it}\"" }.join(' ')
+    // Use dataset keys from params.datasets so EMBEDDINGS reads datasets defined in nextflow.config
+    def datasets_str = params.datasets.keySet().toList().collect { "\"${it}\"" }.join(' ')
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -27,7 +28,7 @@ process EMBEDDINGS {
     # Process each protein directory
     for dataset in ${datasets_str}; do
         dataset_path="${params.outdir}/\$dataset/"
-        embedding_path="\$dataset_path/files_for_embeddings"
+        embedding_path="${params.outdir}/\$dataset/files_for_embeddings/"
 
         for protein_dir in "\$embedding_path"/*; do
             if [ -d "\$protein_dir" ]; then
@@ -38,9 +39,7 @@ process EMBEDDINGS {
                 # Process genofeature directories, but only if they're in selected_list
                 for genofeature_dir in "\$protein_dir"/*; do
                     if [ -d "\$genofeature_dir" ]; then
-                        genofeature=\$(basename "\$genofeature_dir")
-                        # Check if genofeature is in selected_list (case-insensitive)
-                        if echo "${selected_list}" | tr '[:upper:]' '[:lower:]' | grep -iq "\'\$(echo \$genofeature | tr '[:upper:]' '[:lower:]')\'"; then
+                            genofeature=\$(basename "\$genofeature_dir")
                             echo "Processing genofeature directory: \$genofeature"
                             output_dir="embeddings/\$dataset/\$protein/\$genofeature"
                             mkdir -p "\$output_dir"
@@ -49,15 +48,15 @@ process EMBEDDINGS {
                             for fasta in "\$genofeature_dir"/*.fasta; do
                                 if [ -f "\$fasta" ]; then
                                     fasta_base=\$(basename "\$fasta" .fasta)
-                                    
-                                    # Check if embeddings exist
+                                
+                                    # Check if embeddings exist (published under params.outdir)
                                     if [ -d "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature/batch_0" ] && [ -n "\$(find "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature/batch_0" -name '*.pt' 2>/dev/null)" ]; then
                                         echo "Using existing embeddings for \$fasta_base"
                                         cp -r "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature" "embeddings/\$dataset/\$protein/"
                                     else
                                         echo "Generating embeddings for \$fasta_base"
-                                        python3 ${projectDir}/tools/embeddings/extract.py \\
-                                            ${projectDir}/tools/embeddings/esm2_t36_3B_UR50D.pt \\
+                                        python3 ${model_folder}/extract.py \\
+                                            ${model_folder}/esm2_t36_3B_UR50D.pt \\
                                             "\$fasta" \\
                                             "\$output_dir" \\
                                             --repr_layers 36 \\
@@ -66,7 +65,6 @@ process EMBEDDINGS {
                                 fi
                             done
                         fi
-                    fi
                 done
             fi
         done
