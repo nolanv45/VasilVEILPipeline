@@ -63,7 +63,8 @@ workflow FIRST_RUN {
                         protein_config.pasv_align_refs : null,
                     cleaned_fasta: fasta
                 ]
-                tuple(new_meta, fasta)
+                // stage the subject DB file so Nextflow copies it into the task workdir
+                tuple(new_meta, fasta, file(protein_config.subjectDB))
             }
 
         PHIDRA(ch_dataset_proteins)
@@ -181,31 +182,24 @@ workflow SECOND_RUN {
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets, ch_combined_tsv
+        ch_embedding_datasets, ch_combined_tsv, "${params.outdir}/tools/"
     )
-    // embeddings found, generate new embeddings for these bc didnt find in output file.
 
     ch_coordinates = GENERATE_COORDINATES(
         ch_embeddings
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
     )
 
-    // remember to fix the input from coordinates the same way you did to pasv output.
     ch_umap = UMAP_PROJECTION(
-        // "/mnt/VEIL/users//nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
         ch_coordinates,
         ch_filtered_tsv,
         ch_metadata
     )
 
     ch_hbd = HDBSCAN(
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
         ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,
-        ch_umap.plots
-        // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
-        
+        ch_umap.plots       
     )
     emit:
         ch_combined_tsv
