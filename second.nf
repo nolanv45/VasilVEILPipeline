@@ -9,7 +9,6 @@ process EMBEDDINGS {
     memory { 50.GB }
     
     input:
-        val embedding_datasets
         path combined_tsv
         path model_folder
         
@@ -24,6 +23,8 @@ process EMBEDDINGS {
     set -euo pipefail
     
     mkdir -p embeddings
+    echo "combined_tsv: ${combined_tsv}"
+    echo "model_folder: ${model_folder}"
 
     # Process each protein directory
     for dataset in ${datasets_str}; do

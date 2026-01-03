@@ -18,8 +18,6 @@ SPLIT_BY_GENOFEATURE;} from './first.nf'
 include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC} from './third.nf'
 
 
-
-
 workflow {
     Channel
         .fromList(params.datasets.entrySet())
@@ -182,7 +180,7 @@ workflow SECOND_RUN {
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets, ch_combined_tsv, "${params.outdir}/tools/"
+        ch_combined_tsv, "${baseDir}/tools/"
     )
 
     ch_coordinates = GENERATE_COORDINATES(
