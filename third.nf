@@ -5,7 +5,7 @@ process GENERATE_COORDINATES_2 {
         mode: 'copy'
         
     label 'gpu'  
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    container "containers/umap/umap.sif"
     
     memory { 50.GB }
     
@@ -17,9 +17,18 @@ process GENERATE_COORDINATES_2 {
         path "second_coordinates/connections.tsv", emit: connections_tsv
         
     script:
-    def selected_list = params.selected_genofeatures_2.collect { "\'${it}\'" }.join(', ')
+    def excluded_list = params.excluded_genofeatures.collect { "\'${it}\'" }.join(', ')
     """
-    #!/usr/bin/env python3
+     #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Ensure a writable Numba cache directory in the work folder
+    mkdir -p \$PWD/.numba_cache
+    chmod 1777 \$PWD/.numba_cache || true
+    export NUMBA_CACHE_DIR=\$PWD/.numba_cache
+
+    # Run the Python script using the conda environment's python binary
+    /opt/conda/envs/umap/bin/python - <<'PY'
     import os
     import torch
     import numpy as np
@@ -68,17 +77,18 @@ process GENERATE_COORDINATES_2 {
     print(f"Found {len(pt_files)} .pt files")
     
     # Process each .pt file
-    selected_subdirs = [${selected_list}]
+    excluded_subdirs = [${excluded_list}]
     for file_path in pt_files:
         genofeature = Path(file_path).parent.parent.name
-        print(genofeature)
-        if genofeature.lower() in [s.lower() for s in selected_subdirs]:
+        if genofeature.lower() not in [s.lower() for s in excluded_subdirs]:
             print(f"Processing: {file_path}")
             embedding, embedding_id = load_embedding(file_path)
             if embedding is not None and embedding_id is not None:
                 embeddings.append(embedding)
                 embedding_ids.append(embedding_id)
                 print(f"Successfully loaded embedding from {file_path}")
+        else:
+            print(f"Skipping excluded genofeature: {genofeature} in {file_path}")
 
     if len(embeddings) > 0:
         print(f"Processing {len(embeddings)} embeddings")
@@ -130,12 +140,18 @@ process GENERATE_COORDINATES_2 {
         connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
         connections_file = f"second_coordinates/connections.tsv"
         connections_df.to_csv(connections_file, sep='\t', index=False)
+
+    PY
     """
 }
 
+
+
+
+
 process MODULE_FILE {
     
-    conda "/home/nolanv/.conda/envs/phidra"
+    container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}", 
         mode: 'copy',
         pattern: "*.tsv"
@@ -148,7 +164,7 @@ process MODULE_FILE {
     path("contig_df.tsv"), emit: standardized
 
     script:
-    def selected_list = params.selected_genofeatures_2.collect { "\'${it}\'" }.join(', ')
+    def excluded_list = params.excluded_genofeatures.collect { "\'${it}\'" }.join(', ')
     """
 #!/usr/bin/env python3
 # will take tsv files that output from each dataset per orf basis.
@@ -159,9 +175,10 @@ import os
 
 df = pd.read_csv("${tsv_file}", sep='\t')
 metadata = pd.read_csv("${metadata_file}", sep='\t')
+excluded_features = [${excluded_list}]
 genofeatures = []
 for feature in metadata['genofeature']:
-    if feature in [${selected_list}]:
+    if feature not in excluded_features:
         genofeatures.append(feature)
 
 df = df[df['genofeature'].isin(genofeatures)]
@@ -201,7 +218,7 @@ process MODIFY_CLUSTERS {
     publishDir "${params.outdir}/clusters",
         mode: 'copy'
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    container "containers/phidra/phidra.sif"
     
     input:
         path cluster_csv_dir // Directory containing the cluster CSV files
@@ -282,7 +299,7 @@ process ZEROFIVEC {
     publishDir "${params.outdir}/clusters_imgs",
         mode: 'copy'
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    container "containers/umap/umap.sif"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -449,12 +466,13 @@ process GENOFEATURE_CENTRIC {
     publishDir "${params.outdir}/",
         mode: 'copy'
         
-    conda "/home/nolanv/.conda/envs/esm-umap"
+    container "containers/umap/umap.sif"
     
     input:
         path module_file  // Path to the module file with genofeature information
         path coordinates_file
         path connections_file  // Path to the connections file
+        path metadata_file  // Path to the metadata file
 
         
     output:
@@ -495,12 +513,11 @@ if os.path.exists(connections_file):
     connections_df = pd.read_csv(connections_file, sep='\t')
     connections = list(zip(connections_df['id1'], connections_df['id2']))
 
-visible_features_list = ['rPolB', 'pPolB', 'piPolB']
-
 plot_output_dir = "genofeature_plots"
 os.makedirs(plot_output_dir, exist_ok=True)
 
-visible_features_list = "${params.selected_genofeatures.join(',')}".split(',')
+excluded = "${params.excluded_genofeatures.join(',')}".split(',') if "${params.excluded_genofeatures.join(',')}" else []
+visible_features_list = [f for f in genofeature_cols if f not in excluded]
 
 for feature in visible_features_list:
     # 1. Find all contigs where any visible_feature is in the module (split by '_')

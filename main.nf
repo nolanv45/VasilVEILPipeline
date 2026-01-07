@@ -18,9 +18,8 @@ SPLIT_BY_GENOFEATURE;} from './first.nf'
 include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC} from './third.nf'
 
 
-
-
 workflow {
+  if (!params.final_analysis) {
     Channel
         .fromList(params.datasets.entrySet())
         .map { entry ->
@@ -43,6 +42,10 @@ workflow {
     else {
         SECOND_RUN("${params.outdir}/combined_datasets.tsv")
     }
+  }
+  if (params.final_analysis) {
+        THIRD_RUN("${params.outdir}/combined_datasets.tsv")
+  }
 }
 
 workflow FIRST_RUN {
@@ -182,7 +185,7 @@ workflow SECOND_RUN {
     ch_embedding_datasets = Channel.value(params.embedding_datasets)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_datasets, ch_combined_tsv, "${params.outdir}/tools/"
+        ch_combined_tsv, "${baseDir}/tools/"
     )
 
     ch_coordinates = GENERATE_COORDINATES(
@@ -205,25 +208,25 @@ workflow SECOND_RUN {
         ch_combined_tsv
 }
 
-// workflow THIRD_RUN {
-//     take:
-//         ch_combined_tsv
 
-//     main:
-//     ch_filtered_tsv = Channel.fromPath(params.second_run)
-//     ch_metadata = Channel.fromPath(params.genofeature_metadata)
+workflow THIRD_RUN {
+    take:
+        ch_combined_tsv
 
-//     ch_module_file = MODULE_FILE(
-//         ch_filtered_tsv,
-//         ch_metadata
-//     )
+    main:
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-//     GENERATE_COORDINATES_2(params.embeddings)
-//     ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
-//     ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
-//     MODIFY_CLUSTERS(ch_cluster_dir)
-//     // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
+    ch_module_file = MODULE_FILE(
+        ch_combined_tsv,
+        ch_metadata
+    )
 
-//     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections)
+    GENERATE_COORDINATES_2("${params.outdir}/embeddings")
+    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+    MODIFY_CLUSTERS("${params.outdir}/hdbscan/clusters_csv")
+    // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
 
-// }
+    GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
+
+}
