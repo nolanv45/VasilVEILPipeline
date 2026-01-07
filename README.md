@@ -3,14 +3,14 @@ A Nextflow pipeline for identifying and analyzing phage replication proteins and
 
 The Viral Ecology and Informatics Lab (VEIL) at the University of Delaware investigates viral communities by identifying viral populations through the replication proteins encoded in their genomes. These replication proteins are critical to the biology of phages (viruses that infect microbes), influencing phenotypic characteristics of infection, such as replication speed, burst size, and infection strategy (virulent vs. temperate), which ultimately impact microbial host communities and nutrient cycling. 
 
-This repository hosts an automated pipeline built with Nextflow which identifies and characterizes viral replication proteins and modules, providing annotated outputs and visualizations.
+This repository hosts an automated pipeline built with Nextflow which identifies and characterizes viral replication proteins and modules, specifically targeting DNA Polymerase A (PolA), DNA Polymerase B (PolB), Ribonucleotide Reductase (RNR), and helicases using user-established reference resources. The pipeline provides annotated outputs and visualizations.
 
 ## Features
 
-- Automated detection of phage replication proteins
+- Automated detection of phage replication proteins (PolA, PolB, RNR, and helicases)
 - Annotation of genofeature metadata through PHIDRA and PASV
 - Replication module detection (co-occurring proteins on contigs)
-- Protein embeddings via a fine-tuned viral ESM2 Protein Language Model (PLM), which encodes sequence, structural, and functional information
+- Protein embeddings via an ESM2 Protein Language Model (PLM) fine-tuned on diverse viral proteomes (Sawhney et al., 2025), which captures sequence, structural, and functional information specific to viral proteins
 - Outputs include annotated tsvs, summary statistics, and UMAP projection visualizations
 - Built with Nextflow for portability and HPC/cloud compatibility
 
