@@ -37,7 +37,6 @@ process EMBEDDINGS {
                 echo "Processing protein directory: \$protein"
                 mkdir -p "embeddings/\$dataset/\$protein"
 
-                # Process genofeature directories, but only if they're in selected_list
                 for genofeature_dir in "\$protein_dir"/*; do
                     if [ -d "\$genofeature_dir" ]; then
                             genofeature=\$(basename "\$genofeature_dir")
@@ -79,8 +78,7 @@ process HDBSCAN {
         mode: 'copy',
         saveAs: { filename ->
             if (filename.startsWith("plots/tiled_image_md")) filename
-            // else if (filename.endsWith(".png")) "plots/${filename}"
-            else if (filename.endsWith(".csv")) "clusters_csv/${filename}"
+            else if (filename.startsWith("clusters_csv/")) filename
             else null
         }
         
@@ -95,7 +93,7 @@ process HDBSCAN {
     output:
         path "plots/*.png", emit: plots
         path "plots/tiled_image_md*", emit: tiled_image
-        path "plots/*.csv", emit: clusters_csv
+        path "clusters_csv/*.csv", emit: clusters_csv
 
     script:
     """
@@ -216,6 +214,7 @@ metadata_df = pd.read_csv("${metadata_file}", sep='\t')
 
 # Create required directories
 os.makedirs("plots", exist_ok=True)
+os.makedirs("clusters_csv", exist_ok=True)
 
 # Copy input UMAP plots to working directory
 os.system("cp ${plots} plots/")
@@ -236,7 +235,7 @@ for umap_file in os.listdir("plots"):
         # Generate HDBSCAN plots with different min_cluster_size values
         for mc in ${params.mc}:
             output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
-            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "plots")
+            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv")
 
 
 from PIL import Image
@@ -425,7 +424,6 @@ process UMAP_PROJECTION {
         path "plots/*.png", emit: plots
         
     script:
-    def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
     """
 #!/usr/bin/env python3
 import os
@@ -774,7 +772,6 @@ process GENERATE_COORDINATES {
         path "*", emit: coordinates_files
         
     script:
-    def selected_list = params.selected_genofeatures.collect { "\'${it}\'" }.join(', ')
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -834,16 +831,13 @@ pt_files = find_pt_files("${embeddings}")
 print(f"Found {len(pt_files)} .pt files")
 
 # Process each .pt file
-selected_subdirs = [${selected_list}]
 for file_path in pt_files:
-    genofeature = Path(file_path).parent.parent.name
-    if genofeature.lower() in [s.lower() for s in selected_subdirs]:
-        print(f"Processing: {file_path}")
-        embedding, embedding_id = load_embedding(file_path)
-        if embedding is not None and embedding_id is not None:
-            embeddings.append(embedding)
-            embedding_ids.append(embedding_id)
-            print(f"Successfully loaded embedding from {file_path}")
+    print(f"Processing: {file_path}")
+    embedding, embedding_id = load_embedding(file_path)
+    if embedding is not None and embedding_id is not None:
+        embeddings.append(embedding)
+        embedding_ids.append(embedding_id)
+        print(f"Successfully loaded embedding from {file_path}")
 
 if len(embeddings) > 0:
     print(f"Processing {len(embeddings)} embeddings")
@@ -899,40 +893,3 @@ PY
     """
 }
 
-
-
-
-// workflow {
-//     // Create input channels
-//     ch_filtered_tsv = Channel.fromPath(params.second_run)
-//     ch_metadata = Channel.fromPath(params.genofeature_metadata)
-
-//     ch_embedding_datasets = Channel.value(params.embedding_datasets)
-
-//     // ch_embeddings = EMBEDDINGS(
-//     //     ch_embedding_datasets
-//     // )
-
-//     // ch_coordinates = GENERATE_COORDINATES(
-//     //     // ch_embeddings
-//     //     "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/full_ena_output/embeddings"
-//     // )
-
-//     // remember to fix the input from coordinates the same way you did to pasv output.
-//     ch_umap = UMAP_PROJECTION(
-//         "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-//         // ch_coordinates,
-//         ch_filtered_tsv,
-//         ch_metadata
-//     )
-
-//     ch_hbd = HDBSCAN(
-//         "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/figures_folder/coordinates",
-//         // ch_coordinates,
-//         ch_filtered_tsv,
-//         ch_metadata,
-//         ch_umap.plots
-//         // "/mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/work/0b/eab48116d13496090e556b588f6dfa/plots"
-        
-//     )
-// }
