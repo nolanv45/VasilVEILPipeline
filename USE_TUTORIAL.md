@@ -102,7 +102,7 @@ pfam_annotation_map = [
 ]
 
 ## Protein configuration
-Each protein block controls PHIDRA and PASV behavior. Enter each protein as a block separated by a comma in this format.
+Each protein block controls PHIDRA and PASV behavior. Enter each protein as a block separated by a comma in this format. If the protein will not use PASV, can omit pasv_align_refs.
 
 proteins = [
     [ protein: "RNR", 
@@ -110,10 +110,9 @@ proteins = [
     subjectDB: "/path/to/subjectDB.fa",
     pasv_align_refs: "/path/to/pasv_refs.fa"
     ],     
-    [ protein: "PolA", 
+    [ protein: "PolB", 
     pfamDomain: "/path/to/pfamDomain.tsv", 
     subjectDB: "/path/to/subjectDB.fa",
-    pasv_align_refs: "/path/to/pasv_refs.fa"
     ]
 ]
 
