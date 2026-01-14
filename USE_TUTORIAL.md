@@ -88,6 +88,12 @@ params {
 }
 ```
 
+Additionally, the underscore-delimited fields can be extraced for orf start/stop positions on their relative contigs. The number put into orf_coord_fields needs to be the start orf position. Write a negative index; -1 being last field, -2 second to last, etc.
+
+```groovy
+  orf_coord_fields = [BATS: -2, GOV: -3]
+```
+
 ## PHIDRA and Pfam Database Paths
 
 PHIDRA conducts homology search and Pfam domain-based validation to identify proteins of interest. The path of PHIDRA directory and pfamDB (found inside PHIDRA directory) is by default included in the pipeline directory.
