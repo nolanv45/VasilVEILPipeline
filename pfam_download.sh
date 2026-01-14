@@ -11,4 +11,4 @@ rm Pfam-A.hmm.gz Pfam-A.hmm.dat.gz
 
 hmmpress Pfam-A.hmm
 
-cd VasilVEILPipeline
+cd ..
