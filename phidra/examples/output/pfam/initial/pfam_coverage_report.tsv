@@ -1,0 +1,10 @@
+seq_id	aln_start	aln_end	env_start	env_end	hmm_acc	hmm_name	type	hmm_start	hmm_end	hmm_length	score	evalue	significance	clan
+A0A009RE11_polA_valid	4	165	3	165	PF02739.21	5_3_exonuc_N	Domain	2	164	164	182.8	4.8e-54	1	CL0280
+A0A009RE11_polA_valid	166	260	166	261	PF01367.25	5_3_exonuc	Domain	1	96	97	111.3	2.9e-32	1	CL0464
+A0A009RE11_polA_valid	329	515	329	516	PF01612.25	DNA_pol_A_exo1	Domain	1	172	173	115.5	2.7e-33	1	CL0219
+A0A009RE11_polA_valid	550	921	548	921	PF00476.25	DNA_pol_A	Family	3	381	381	528.2	1.3e-158	1	No_Clan
+A0A011N129_polA_valid	1	279	1	280	PF00476.25	DNA_pol_A	Family	99	380	381	413.0	1.3e-123	1	No_Clan
+A0A011SJ11_polA_valid	8	177	8	177	PF02739.21	5_3_exonuc_N	Domain	1	164	164	195.7	4.9e-58	1	CL0280
+A0A011SJ11_polA_valid	179	272	178	273	PF01367.25	5_3_exonuc	Domain	2	96	97	93.0	1.4e-26	1	CL0464
+A0A011SJ11_polA_valid	505	886	504	887	PF00476.25	DNA_pol_A	Family	2	380	381	475.5	1.3e-142	1	No_Clan
+tr_A0A812JX39_polA_putative	86	246	85	254	PF02739.21	5_3_exonuc_N	Domain	2	158	164	132.5	1.4e-38	1	CL0280

@@ -1,0 +1,5 @@
+Query_ID	Target_ID	Sequence_Identity	Alignment_Length	Mismatches	Gap_Openings	Query_Start	Query_End	Target_Start	Target_End	Evalue	Bit_Score
+A0A009RE11_polA_valid	Escheria_coli_IAI39	0.491	921	468	0	3	923	8	928	8.560E-272	846
+A0A011N129_polA_valid	sp_Q9F173_DPO1_SALTY	0.670	282	93	0	1	282	647	928	1.567E-120	375
+A0A011SJ11_polA_valid	sp_P00582_DPO1_ECOLI	0.358	919	564	0	9	888	9	927	3.230E-151	493
+tr_A0A812JX39_polA_putative	Themus_aquaticus	0.328	151	97	0	83	233	11	156	2.167E-17	75

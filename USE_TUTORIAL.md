@@ -32,6 +32,13 @@ mkdir -p containers
 cp -r /mnt/VEIL/users/nolanv/pipeline_project/VasilVEILPipeline/containers/* containers/
 ```
 
+Then, perform these commands.
+
+```bash
+chmod +x pfam_download.sh
+./pfam_download.sh
+```
+
 ### For non-VEIL members
 
 Perform steps below:
@@ -39,6 +46,11 @@ Perform steps below:
 ```bash
 chmod +x download_dependencies.sh
 ./download_dependencies.sh
+```
+
+```bash
+chmod +x pfam_download.sh
+./pfam_download.sh
 ```
 
 **Note:** The dependency folder contains large files. Running the command below could take over an hour, it is suggested to use a job scheduler.
