@@ -101,6 +101,11 @@ output_file = "${meta.protein}_domain_matches.tsv"
 # Inline mapping injected from nextflow (PF -> label)
 pfam_map = json.loads('${pfam_map_json}')
 
+# load orf coord mapping
+orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+meta_dataset = "${meta.id}"
+
+
 # build lookup pfam_id -> label (normalize keys to uppercase)
 pfam_to_label = {}
 for k, v in pfam_map.items():
@@ -117,8 +122,17 @@ for k, v in pfam_map.items():
 
 def derive_contig_id(query_id):
     parts = str(query_id).split('_')
-    if len(parts) > 3:
-        return '_'.join(parts[:-3])
+    try:
+        raw = orf_coord_map.get(meta_dataset)
+        if raw is None:
+            raw = orf_coord_map.get(meta_dataset.upper())
+        drop = int(raw) if raw is not None else -3
+    except Exception:
+        drop = -3
+    if drop == 0:
+        return query_id
+    if len(parts) > drop:
+        return '_'.join(parts[:drop])
     return query_id
 
 # Read the Pfam validated report
@@ -168,6 +182,7 @@ out_df.to_csv(output_file, sep='\\t', index=False)
 print(f"Wrote {len(out_df)} domain matches to {output_file}")
     """
 }
+
 
 process PASV {
     tag "${meta.id}:${meta.protein}"
@@ -248,6 +263,32 @@ process ANALYZE_AND_PLOT {
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
+    import json
+
+    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+    meta_dataset = "${meta.id}"
+
+    def get_drop(dataset):
+        raw = orf_coord_map.get(dataset)
+        if raw is None:
+            raw = orf_coord_map.get(dataset.upper())
+        try:
+            return int(raw)
+        except Exception:
+            return int(orf_coord_default)
+
+    def compute_orf_length(orf_id, drop):
+        parts = str(orf_id).split('_')
+        if drop < 2:
+            return None
+        start_idx = drop
+        end_idx = drop + 1
+        try:
+            start = int(parts[start_idx])
+            end = int(parts[end_idx])
+            return (abs(end - start) + 1) // 3
+        except Exception:
+            return None
 
     # Read and process input data
     df = pd.read_csv("${input_tsv}", sep='\\t')
@@ -255,9 +296,8 @@ process ANALYZE_AND_PLOT {
 
     # Calculate ORF length if not present
     if 'ORF_length' not in df.columns:
-        df['ORF_length'] = df['orf_id'].apply(
-            lambda x: (abs(int(x.split('_')[-3]) - int(x.split('_')[-2])) + 1) // 3
-        )
+        drop = get_drop(meta_dataset)
+        df['ORF_length'] = df['orf_id'].apply(lambda x: compute_orf_length(x, drop))
 
     # Generate basic statistics
     stats = df.groupby('genofeature').agg({
@@ -479,6 +519,20 @@ process STANDARDIZE_OUTPUTS {
     import os
     import glob
     import sys
+    import json
+
+    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+    meta_dataset = "${meta.id}"
+
+    def get_drop(dataset):
+        raw = orf_coord_map.get(dataset)
+        if raw is None:
+            raw = orf_coord_map.get(dataset.upper())
+        try:
+            return int(raw)
+        except Exception:
+            return int(orf_coord_default)
+    
 
     required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
     dfs = []
@@ -496,10 +550,11 @@ process STANDARDIZE_OUTPUTS {
 
         cols = set(df.columns.str.lower())
         # PASV detection
+
         if 'name' in df.columns and 'signature' in df.columns:
             protein = os.path.basename(tsv_file).split('_')[0]
             standardized = pd.DataFrame({
-                'contig_id': df['name'].apply(lambda x: '_'.join(str(x).split('_')[:-3])),
+                'contig_id': df['name'].apply(lambda x: '_'.join(str(x).split('_')[:get_drop(meta_dataset)])),
                 'orf_id': df['name'],
                 'identified': 'PASV',
                 'genofeature': df['signature'],
@@ -550,9 +605,21 @@ process PHIDRA_ONLY_SUMMARY {
     """
     #!/usr/bin/env python3
     import pandas as pd
-    
-    protein = "${meta.protein}"
+    import json
+   
+    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+    meta_dataset = "${meta.id}"
 
+    def get_drop(dataset):
+        raw = orf_coord_map.get(dataset)
+        if raw is None:
+            raw = orf_coord_map.get(dataset.upper())
+        try:
+            return int(raw)
+        except Exception:
+            return int(orf_coord_default)
+
+    protein = "${meta.protein}"
     # Process FASTA file to get ORF information
     orfs = []
     current_header = None
@@ -565,7 +632,7 @@ process PHIDRA_ONLY_SUMMARY {
     # Create DataFrame with same structure as annotate_top_hits output
     results = []
     for orf in orfs:
-        genome_id = '_'.join(orf.split('_')[:-3])
+        genome_id = '_'.join(orf.split('_')[:get_drop(meta_dataset)])
         results.append({
             'genome_id': genome_id,
             'orf_id': orf,
@@ -603,6 +670,19 @@ process ANNOTATE_HITS {
 import sys
 import os
 from Bio import SeqIO
+import json
+
+orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+meta_dataset = "${meta.id}"
+
+def get_drop(dataset):
+    raw = orf_coord_map.get(dataset)
+    if raw is None:
+        raw = orf_coord_map.get(dataset.upper())
+    try:
+        return int(raw)
+    except Exception:
+        return int(orf_coord_default)
 
 protein = "${meta.protein}"
 pfam_validated_fasta = "${pfam_validated_fasta}"
@@ -619,7 +699,7 @@ def load_validated_ids():
 
 def parse_contig_orf(query_id):
     parts = query_id.split("_")
-    contig_id = "_".join(parts[:-3])
+    contig_id = "_".join(parts[:get_drop(meta_dataset)])
     return contig_id, query_id
 
 def get_signature(target_id):
