@@ -73,7 +73,7 @@ workflow FIRST_RUN {
         PHIDRA(ch_dataset_proteins)
 
         ch_branched = PHIDRA.out.results
-            .branch { meta, fasta, init_search, pfam -> 
+            .branch { meta, fasta, pfam, init, recurs -> 
                 annotation: meta.protein.toLowerCase() in (params.tophit_proteins.collect { it.toLowerCase() })
                 pasv: meta.protein.toLowerCase() in (params.pasv_proteins.collect { it.toLowerCase() })
                 pfam: meta.protein.toLowerCase() in (params.domain_proteins.collect { it.toLowerCase() })
@@ -81,7 +81,7 @@ workflow FIRST_RUN {
             }
 
         ch_pasv = ch_branched.pasv
-            .map { meta, fasta, init_search, pfam ->
+            .map { meta, fasta, pfam, init, recurs ->
                 def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
                 def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
                 def roi_start   = settings.roi_start   ?: ''
@@ -99,13 +99,16 @@ workflow FIRST_RUN {
                 tuple(new_meta, fasta, meta.pasv_align_refs)
             }
 
-        ANNOTATE_HITS(ch_branched.annotation)
+        ANNOTATE_HITS(ch_branched.annotation.map { meta, fasta, pfam, init, recurs -> 
+            tuple(meta, fasta, init, recurs)
+        }
+        )
         PASV(ch_pasv)
 
         PASV_POST(PASV.out.results)
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
         DOMAIN_MATCH(ch_branched.pfam
-            .map { meta, fasta, init_search, pfam -> 
+            .map { meta, fasta, pfam, init, recurs -> 
                 tuple(meta, fasta, pfam, params.pfam_annotation_map)
             }
         )

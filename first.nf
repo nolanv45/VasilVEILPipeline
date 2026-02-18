@@ -21,13 +21,7 @@ process PHIDRA {
     container "containers/phidra/phidra.sif"
     label 'standard'
     publishDir "${params.outdir}/${meta.id}/phidra",
-        mode: 'copy',
-        saveAs: { filename ->
-            if (filename.endsWith("full_proteins.fa")) "validated_sequences/${filename}"
-            else if (filename.contains("hits.tsv")) "mmseqs_results/${filename}"
-            else if (filename == "pfam_validated_merged_report.tsv") "pfam/${filename}"
-            else null
-        }
+        mode: 'copy'
 
     input:
         tuple val(meta), path(fasta), path(subject_db)
@@ -35,8 +29,9 @@ process PHIDRA {
     output:
         tuple val(meta), 
               path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
-              path("*/mmseqs/initial/hits.tsv"),
               path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
+              path("*/mmseqs/initial/hits.tsv"),
+              path("*/mmseqs/recursive/hits.tsv"),
               emit: results
 
     script:
@@ -56,12 +51,13 @@ process PHIDRA {
         -f ${meta.protein} \\
         -o \$WORK_DIR \\
         -t ${task.cpus}
-
-   # if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
-     #   mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
-      #  echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
-      #      "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
-   # fi
+    
+    if [ ! -s "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv" ]; then
+        echo "recursive hits.tsv does not exist, creating it."
+        mkdir -p "\$WORK_DIR/${meta.protein}/mmseqs/recursive"
+        printf "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score\n" \
+            > "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv"
+    fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -659,7 +655,8 @@ process ANNOTATE_HITS {
     input:
     tuple val(meta), 
           path(pfam_validated_fasta),
-          path(initial_search, stageAs: 'initial_search.tsv')
+          path(initial_search, stageAs: 'initial_search.tsv'),
+          path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
     tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
@@ -674,27 +671,21 @@ import json
 
 orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
 meta_dataset = "${meta.id}"
+protein = "${meta.protein}"
+
+pfam_validated_fasta = "${pfam_validated_fasta}"
+file_paths = ["initial_search.tsv", "recursive_search.tsv"]
+output_file = "${meta.protein}_annotated_hits.tsv"
 
 def get_drop(dataset):
-    raw = orf_coord_map.get(dataset)
-    if raw is None:
-        raw = orf_coord_map.get(dataset.upper())
-    try:
-        return int(raw)
-    except Exception:
-        return int(orf_coord_default)
-
-protein = "${meta.protein}"
-pfam_validated_fasta = "${pfam_validated_fasta}"
-file1_path = "initial_search.tsv"
-output_file = "${meta.protein}_annotated_hits.tsv"
+    raw = orf_coord_map.get(dataset) or orf_coord_map.get(dataset.upper())
+    return int(raw)
 
 def load_validated_ids():
     validated_ids = set()
-    with open(pfam_validated_fasta, 'r') as f:
-        for record in SeqIO.parse(f, 'fasta'):
+    with open(pfam_validated_fasta) as f:
+        for record in SeqIO.parse(f, "fasta"):
             validated_ids.add(record.id)
-    print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
     return validated_ids
 
 def parse_contig_orf(query_id):
@@ -702,34 +693,40 @@ def parse_contig_orf(query_id):
     contig_id = "_".join(parts[:get_drop(meta_dataset)])
     return contig_id, query_id
 
-def get_signature(target_id):
+def get_genofeature(target_id):
     return target_id.split("_")[0]
 
-def process_files(file1_path, validated_ids):
+def process_file(file_path, validated_ids):
     results = []
-    with open(file1_path, "r") as f:
-        next(f)
+    if not os.path.exists(file_path):
+        return results
+
+    with open(file_path) as f:
+        next(f)  # skip header
         for line in f:
-            parts = line.strip().split("\\t")
+            parts = line.rstrip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
+
             if query_id in validated_ids:
                 contig_id, orf_id = parse_contig_orf(query_id)
-                signature = get_signature(target_id)
-                results.append((contig_id, orf_id, signature, "Top_Hit_Annotation"))
+                genofeature = get_genofeature(target_id)
+                results.append(
+                    (contig_id, orf_id, "Top_Hit_Annotation", genofeature)
+                )
     return results
 
 def main():
-    print("DEBUG - Current directory:", os.getcwd())
     validated_ids = load_validated_ids()
-    print("DEBUG - Files in directory:", os.listdir("."))
-    print("DEBUG - Processing files:", file1_path)
-    results = process_files(file1_path, validated_ids)
+    results = []
+    for path in file_paths:
+        results.extend(process_file(path, validated_ids))
     with open(output_file, "w") as f:
         f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
-        for contig_id, orf_id, signature, identified in results:
-            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
-    print(f"Results have been saved to: {output_file}")
+        for contig_id, orf_id, identified, genofeature in results:
+            f.write(
+                f"{contig_id}\\t{orf_id}\\t{identified}\\t{genofeature}\\t{protein}\\n"
+            )
 
 if __name__ == "__main__":
     main()
