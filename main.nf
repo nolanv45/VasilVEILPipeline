@@ -15,7 +15,7 @@ COMBINE_DATASETS;
 DUPLICATE_HANDLE;
 SPLIT_BY_GENOFEATURE;} from './first.nf'
 
-include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC} from './third.nf'
+include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC; HDBSCAN_TSV; HDBSCAN_VISUALS} from './third.nf'
 
 
 workflow {
@@ -228,6 +228,9 @@ workflow THIRD_RUN {
     ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
     ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
     MODIFY_CLUSTERS("${params.outdir}/hdbscan/clusters_csv")
+    
+    HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
+    HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info)
     // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
 
     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
