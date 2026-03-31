@@ -271,14 +271,19 @@ process ANALYZE_AND_PLOT {
         try:
             return int(raw)
         except Exception:
-            return int(orf_coord_default)
+            return -3
 
     def compute_orf_length(orf_id, drop):
         parts = str(orf_id).split('_')
-        if drop < 2:
-            return None
         start_idx = drop
         end_idx = drop + 1
+
+        # Support both positive and negative indices while ensuring both fields exist.
+        if not (-len(parts) <= start_idx < len(parts)):
+            return None
+        if not (-len(parts) <= end_idx < len(parts)):
+            return None
+
         try:
             start = int(parts[start_idx])
             end = int(parts[end_idx])
@@ -295,8 +300,12 @@ process ANALYZE_AND_PLOT {
         drop = get_drop(meta_dataset)
         df['ORF_length'] = df['orf_id'].apply(lambda x: compute_orf_length(x, drop))
 
+    # Keep only valid numeric lengths for statistics and plotting.
+    df['ORF_length'] = pd.to_numeric(df['ORF_length'], errors='coerce')
+    plot_df = df.dropna(subset=['ORF_length']).copy()
+
     # Generate basic statistics
-    stats = df.groupby('genofeature').agg({
+    stats = plot_df.groupby('genofeature').agg({
         'ORF_length': ['count', 'mean', 'min', 'max']
     }).reset_index()
     
@@ -311,26 +320,42 @@ process ANALYZE_AND_PLOT {
     plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
     
     # Create boxplot using seaborn
-    sns.boxplot(data=df, x='ORF_length', y='genofeature', 
-               orient='h', color='skyblue')
+    if not plot_df.empty:
+        sns.boxplot(
+            data=plot_df,
+            x='ORF_length',
+            y='genofeature',
+            order=stats['genofeature'].tolist(),
+            orient='h',
+            color='skyblue'
+        )
     
     # Add annotations
-    for i, row in stats.iterrows():
-        # Count annotation (left)
-        plt.annotate(f"N={int(row['count'])}",
-            xy=(row['min_length'], i),
-            xytext=(-10, 0),
-            textcoords='offset points',
-            ha='right', va='center',
-            fontsize=9, color='blue')
-        
-        # Mean annotation (right)
-        plt.annotate(f"Mean={row['mean_length']:.1f}",
-            xy=(row['max_length'], i),
-            xytext=(10, 0),
-            textcoords='offset points',
-            ha='left', va='center',
-            fontsize=9, color='green')
+        for i, row in stats.iterrows():
+            # Count annotation (left)
+            plt.annotate(f"N={int(row['count'])}",
+                xy=(row['min_length'], i),
+                xytext=(-10, 0),
+                textcoords='offset points',
+                ha='right', va='center',
+                fontsize=9, color='blue')
+            
+            # Mean annotation (right)
+            plt.annotate(f"Mean={row['mean_length']:.1f}",
+                xy=(row['max_length'], i),
+                xytext=(10, 0),
+                textcoords='offset points',
+                ha='left', va='center',
+                fontsize=9, color='green')
+    else:
+        plt.text(
+            0.5,
+            0.5,
+            'No valid ORF lengths available for plotting',
+            ha='center',
+            va='center',
+            transform=plt.gca().transAxes
+        )
     
     plt.title("Length Distribution by genofeature")
     plt.xlabel("ORF Length (aa)")
@@ -372,6 +397,35 @@ process PASV_POST {
     import os
     import re
 
+    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+    meta_dataset = "${meta.id}"
+
+    def get_drop(dataset):
+        raw = orf_coord_map.get(dataset)
+        if raw is None:
+            raw = orf_coord_map.get(dataset.upper())
+        try:
+            return int(raw)
+        except Exception:
+            return -3
+
+    def compute_orf_length(orf_id, drop):
+        parts = str(orf_id).split('_')
+        start_idx = drop
+        end_idx = drop + 1
+
+        if not (-len(parts) <= start_idx < len(parts)):
+            return None
+        if not (-len(parts) <= end_idx < len(parts)):
+            return None
+
+        try:
+            start = int(parts[start_idx])
+            end = int(parts[end_idx])
+            return (abs(end - start) + 1) // 3
+        except Exception:
+            return None
+
     raw_expected = '${meta.expected_sigs}'
     tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
     expected_sigs = set(t.upper() for t in tokens if t)
@@ -389,10 +443,10 @@ process PASV_POST {
     processed_df = df[~df['signature'].str.contains('-')].copy()
     print(f"After removing gaps: {processed_df.shape}")
 
-    # Calculate ORF length
-    processed_df['orf_length'] = processed_df['name'].apply(
-        lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
-    )
+    # Calculate ORF length using dataset-specific coordinate indices from nextflow config.
+    drop = get_drop(meta_dataset)
+    processed_df['orf_length'] = processed_df['name'].apply(lambda x: compute_orf_length(x, drop))
+    processed_df = processed_df.dropna(subset=['orf_length']).copy()
 
     # Create span classes based on spans_start and spans_end columns
     processed_df['span_class'] = processed_df.apply(
@@ -674,18 +728,24 @@ meta_dataset = "${meta.id}"
 protein = "${meta.protein}"
 
 pfam_validated_fasta = "${pfam_validated_fasta}"
-file_paths = ["initial_search.tsv", "recursive_search.tsv"]
+file1_path = "initial_search.tsv"
 output_file = "${meta.protein}_annotated_hits.tsv"
 
 def get_drop(dataset):
-    raw = orf_coord_map.get(dataset) or orf_coord_map.get(dataset.upper())
-    return int(raw)
+    raw = orf_coord_map.get(dataset)
+    if raw is None:
+        raw = orf_coord_map.get(dataset.upper())
+    try:
+        return int(raw)
+    except Exception:
+        return int(orf_coord_default)
 
 def load_validated_ids():
     validated_ids = set()
-    with open(pfam_validated_fasta) as f:
-        for record in SeqIO.parse(f, "fasta"):
+    with open(pfam_validated_fasta, 'r') as f:
+        for record in SeqIO.parse(f, 'fasta'):
             validated_ids.add(record.id)
+    print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
     return validated_ids
 
 def parse_contig_orf(query_id):
@@ -693,40 +753,34 @@ def parse_contig_orf(query_id):
     contig_id = "_".join(parts[:get_drop(meta_dataset)])
     return contig_id, query_id
 
-def get_genofeature(target_id):
+def get_signature(target_id):
     return target_id.split("_")[0]
 
-def process_file(file_path, validated_ids):
+def process_files(file1_path, validated_ids):
     results = []
-    if not os.path.exists(file_path):
-        return results
-
-    with open(file_path) as f:
-        next(f)  # skip header
+    with open(file1_path, "r") as f:
+        next(f)
         for line in f:
-            parts = line.rstrip().split("\\t")
+            parts = line.strip().split("\\t")
             query_id = parts[0]
             target_id = parts[1]
-
             if query_id in validated_ids:
                 contig_id, orf_id = parse_contig_orf(query_id)
-                genofeature = get_genofeature(target_id)
-                results.append(
-                    (contig_id, orf_id, "Top_Hit_Annotation", genofeature)
-                )
+                signature = get_signature(target_id)
+                results.append((contig_id, orf_id, signature, "Top_Hit_Annotation"))
     return results
 
 def main():
+    print("DEBUG - Current directory:", os.getcwd())
     validated_ids = load_validated_ids()
-    results = []
-    for path in file_paths:
-        results.extend(process_file(path, validated_ids))
+    print("DEBUG - Files in directory:", os.listdir("."))
+    print("DEBUG - Processing files:", file1_path)
+    results = process_files(file1_path, validated_ids)
     with open(output_file, "w") as f:
         f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
-        for contig_id, orf_id, identified, genofeature in results:
-            f.write(
-                f"{contig_id}\\t{orf_id}\\t{identified}\\t{genofeature}\\t{protein}\\n"
-            )
+        for contig_id, orf_id, signature, identified in results:
+            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
+    print(f"Results have been saved to: {output_file}")
 
 if __name__ == "__main__":
     main()
