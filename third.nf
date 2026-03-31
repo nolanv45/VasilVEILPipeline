@@ -295,6 +295,394 @@ df1_sorted.to_csv("hdbscan_modified_cluster_labels.tsv", index=False, sep="\t")
     """
 }
 
+process HDBSCAN_TSV {
+    publishDir "${params.outdir}/clusters",
+        mode: 'copy'
+        
+    container "containers/phidra/phidra.sif"
+    
+    input:
+        path modified_clusters  // TSV from MODIFY_CLUSTERS with embedding_id, cluster_label, genofeature, label_source
+        path contig_file  // Path to contig_df.tsv or combined_datasets.tsv
+        
+    output:
+        path "hdbscan_cluster_info.tsv", emit: cluster_info
+        path "hdbscan_cluster_relationships.tsv", emit: cluster_relationships
+
+    script:
+    """
+#!/usr/bin/env python3
+import pandas as pd
+from itertools import combinations
+
+# Load data
+clusters_df = pd.read_csv("${modified_clusters}", sep="\t")
+contig_df = pd.read_csv("${contig_file}", sep="\t")
+
+print("Clusters DataFrame shape:", clusters_df.shape)
+print("Contig DataFrame shape:", contig_df.shape)
+
+# The clusters_df already has embedding_id, cluster_label, genofeature, label_source
+# We need to add dataset and contig_id information
+
+# If contig_df is combined_datasets.tsv, it has orf_id = embedding_id
+if 'orf_id' in contig_df.columns:
+    # This is combined_datasets.tsv
+    clusters_df = clusters_df.merge(
+        contig_df[['contig_id', 'orf_id', 'dataset']].drop_duplicates(),
+        left_on='embedding_id',
+        right_on='orf_id',
+        how='left'
+    )
+else:
+    # Fallback: try to extract dataset and contig_id from embedding_id pattern
+    # embedding_id format: DATASET_NODE_..._position_..._...
+    def extract_dataset_from_embedding(emb_id):
+        parts = emb_id.split('_')
+        return parts[0]
+    
+    clusters_df['dataset'] = clusters_df['embedding_id'].apply(extract_dataset_from_embedding)
+
+print("After merging with contig info:")
+print(clusters_df.head())
+
+# Filter out unclustered (-1) for most analyses
+clustered_df = clusters_df[clusters_df['cluster_label'] >= 0].copy()
+
+# Get unique clusters (excluding -1)
+unique_clusters = sorted(clustered_df['cluster_label'].unique())
+print(f"\\nFound {len(unique_clusters)} clusters")
+
+# =====================================================
+# TABLE 1: CLUSTER INFO (one row per cluster)
+# =====================================================
+print("\\n=== Generating Cluster Info Table ===")
+
+# First: Genofeature counts for pivoting
+genofeature_count = clustered_df.groupby(['cluster_label', 'genofeature']).size().reset_index(name='count')
+genofeature_count_pivot = genofeature_count.pivot_table(
+    index='cluster_label',
+    columns='genofeature',
+    values='count',
+    fill_value=0
+)
+
+# Dataset counts for stacked composition plotting
+dataset_count = clustered_df.groupby(['cluster_label', 'dataset']).size().reset_index(name='count')
+dataset_count_pivot = dataset_count.pivot_table(
+    index='cluster_label',
+    columns='dataset',
+    values='count',
+    fill_value=0
+)
+
+# Build cluster info
+cluster_info_list = []
+
+for cluster in unique_clusters:
+    cluster_data = clustered_df[clustered_df['cluster_label'] == cluster]
+    
+    num_embeddings = len(cluster_data)
+    num_contigs = len(cluster_data['contig_id'].dropna().unique())
+    num_genofeatures = len(cluster_data['genofeature'].unique())
+    datasets_in_cluster = sorted(cluster_data['dataset'].dropna().unique())
+    num_datasets = len(datasets_in_cluster)
+    
+    # Most common genofeatures
+    top_genofeatures = cluster_data['genofeature'].value_counts().to_dict()
+    top_gf_str = ', '.join([f"{gf}({cnt})" for gf, cnt in sorted(top_genofeatures.items(), key=lambda x: x[1], reverse=True)])
+    
+    row = {
+        'cluster_id': cluster,
+        'num_embeddings': num_embeddings,
+        'num_contigs': num_contigs,
+        'num_genofeatures': num_genofeatures,
+        'num_datasets': num_datasets,
+        'datasets': '|'.join(datasets_in_cluster),
+        'top_genofeatures': top_gf_str
+    }
+    
+    # Add genofeature counts as columns
+    for gf in genofeature_count_pivot.columns:
+        row[f"{gf}_count"] = int(genofeature_count_pivot.loc[cluster, gf]) if cluster in genofeature_count_pivot.index else 0
+
+    # Add dataset counts as columns
+    for dataset in dataset_count_pivot.columns:
+        row[f"dataset__{dataset}_count"] = int(dataset_count_pivot.loc[cluster, dataset]) if cluster in dataset_count_pivot.index else 0
+    
+    cluster_info_list.append(row)
+
+cluster_info_columns = [
+    'cluster_id',
+    'num_embeddings',
+    'num_contigs',
+    'num_genofeatures',
+    'num_datasets',
+    'datasets',
+    'top_genofeatures'
+]
+cluster_info_columns += [f"{gf}_count" for gf in genofeature_count_pivot.columns]
+cluster_info_columns += [f"dataset__{dataset}_count" for dataset in dataset_count_pivot.columns]
+
+cluster_info_df = pd.DataFrame(cluster_info_list, columns=cluster_info_columns)
+cluster_info_df.to_csv("hdbscan_cluster_info.tsv", sep="\t", index=False)
+print("Saved: hdbscan_cluster_info.tsv")
+print(f"Shape: {cluster_info_df.shape}")
+
+# =====================================================
+# TABLE 2: CLUSTER RELATIONSHIPS (one row per cluster pair)
+# =====================================================
+print("\\n=== Generating Cluster Relationships Table ===")
+
+relationships_data = []
+
+for cluster1, cluster2 in combinations(unique_clusters, 2):
+    # Get contigs in each cluster
+    contigs_c1 = set(clustered_df[clustered_df['cluster_label'] == cluster1]['contig_id'].dropna())
+    contigs_c2 = set(clustered_df[clustered_df['cluster_label'] == cluster2]['contig_id'].dropna())
+    
+    # Overlap
+    overlap_contigs = len(contigs_c1 & contigs_c2)
+    
+    # Proportion relative to each cluster (asymmetric)
+    prop_c1_in_c2 = overlap_contigs / len(contigs_c1) if len(contigs_c1) > 0 else 0
+    prop_c2_in_c1 = overlap_contigs / len(contigs_c2) if len(contigs_c2) > 0 else 0
+    
+    # Symmetric overlap proportion (balanced view)
+    union_contigs = len(contigs_c1 | contigs_c2)
+    symmetric_overlap = overlap_contigs / union_contigs if union_contigs > 0 else 0
+    
+    # Jaccard index (intersection / union)
+    jaccard = overlap_contigs / union_contigs if union_contigs > 0 else 0
+    
+    relationships_data.append({
+        'cluster_1': cluster1,
+        'cluster_2': cluster2,
+        'shared_contigs': overlap_contigs,
+        'contigs_in_cluster_1': len(contigs_c1),
+        'contigs_in_cluster_2': len(contigs_c2),
+        'total_unique_contigs': union_contigs,
+        'proportion_c1_in_c2': round(prop_c1_in_c2, 4),
+        'proportion_c2_in_c1': round(prop_c2_in_c1, 4),
+        'symmetric_overlap': round(symmetric_overlap, 4),
+        'jaccard_index': round(jaccard, 4)
+    })
+
+relationships_columns = [
+    'cluster_1',
+    'cluster_2',
+    'shared_contigs',
+    'contigs_in_cluster_1',
+    'contigs_in_cluster_2',
+    'total_unique_contigs',
+    'proportion_c1_in_c2',
+    'proportion_c2_in_c1',
+    'symmetric_overlap',
+    'jaccard_index'
+]
+
+relationships_df = pd.DataFrame(relationships_data, columns=relationships_columns)
+relationships_df.to_csv("hdbscan_cluster_relationships.tsv", sep="\t", index=False)
+print("Saved: hdbscan_cluster_relationships.tsv")
+print(f"Shape: {relationships_df.shape}")
+
+print("\\n=== HDBSCAN_TSV Complete ===")
+print(f"Total clusters: {len(unique_clusters)}")
+print(f"Total unclustered embeddings: {len(clusters_df[clusters_df['cluster_label'] == -1])}")
+    """
+}
+
+
+process HDBSCAN_VISUALS {
+    publishDir "${params.outdir}/clusters_imgs",
+        mode: 'copy'
+
+    container "containers/umap/umap.sif"
+
+    input:
+        path cluster_info_tsv
+
+    output:
+        path "hdbscan_cluster_composition_heatmap.png", emit: composition_heatmap
+        path "hdbscan_dataset_composition_stacked_bar.png", emit: dataset_stacked
+        path "hdbscan_genofeature_composition_stacked_bar.png", emit: genofeature_stacked
+
+    script:
+    """
+#!/usr/bin/env python3
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def save_placeholder(output_file, title, message):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.axis('off')
+    ax.set_title(title, fontsize=12)
+    ax.text(0.5, 0.5, message, ha='center', va='center', fontsize=10, wrap=True)
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300)
+    plt.close()
+
+
+cluster_info = pd.read_csv("${cluster_info_tsv}", sep='\t')
+
+if cluster_info.empty:
+    save_placeholder(
+        "hdbscan_cluster_composition_heatmap.png",
+        "Cluster Composition Heatmap",
+        "No clustered points available (all points are unclustered, cluster_label = -1)."
+    )
+    save_placeholder(
+        "hdbscan_dataset_composition_stacked_bar.png",
+        "Dataset Composition (Stacked)",
+        "No clustered points available (all points are unclustered, cluster_label = -1)."
+    )
+    save_placeholder(
+        "hdbscan_genofeature_composition_stacked_bar.png",
+        "Genofeature Composition (Stacked)",
+        "No clustered points available (all points are unclustered, cluster_label = -1)."
+    )
+    raise SystemExit(0)
+
+
+cluster_info = cluster_info.sort_values(by='cluster_id').reset_index(drop=True)
+cluster_labels = cluster_info['cluster_id'].astype(str).tolist()
+
+
+# -----------------------------------------------------
+# Plot 1: Cluster composition heatmap (genofeature counts)
+# -----------------------------------------------------
+genofeature_cols = [
+    col for col in cluster_info.columns
+    if col.endswith('_count') and not col.startswith('dataset__')
+]
+
+if genofeature_cols:
+    heatmap_data = cluster_info[genofeature_cols].to_numpy(dtype=float)
+    row_sums = heatmap_data.sum(axis=1, keepdims=True)
+    heatmap_prop = np.divide(
+        heatmap_data,
+        row_sums,
+        out=np.zeros_like(heatmap_data),
+        where=row_sums > 0
+    )
+
+    fig_w = max(8, min(24, 0.45 * len(genofeature_cols) + 4))
+    fig_h = max(4, min(20, 0.35 * len(cluster_labels) + 3))
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    im = ax.imshow(heatmap_prop, aspect='auto', cmap='viridis')
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Within-cluster proportion')
+
+    ax.set_title('Cluster Composition Heatmap (Genofeature Proportions)')
+    ax.set_xlabel('Genofeature')
+    ax.set_ylabel('Cluster ID')
+    ax.set_xticks(np.arange(len(genofeature_cols)))
+    ax.set_xticklabels([col[:-6] for col in genofeature_cols], rotation=90)
+    ax.set_yticks(np.arange(len(cluster_labels)))
+    ax.set_yticklabels(cluster_labels)
+    plt.tight_layout()
+    plt.savefig('hdbscan_cluster_composition_heatmap.png', dpi=300)
+    plt.close()
+else:
+    save_placeholder(
+        'hdbscan_cluster_composition_heatmap.png',
+        'Cluster Composition Heatmap',
+        'No genofeature count columns found in cluster info TSV.'
+    )
+
+
+# -----------------------------------------------------
+# Plot 2: Dataset composition stacked bar chart
+# -----------------------------------------------------
+dataset_cols = [
+    col for col in cluster_info.columns
+    if col.startswith('dataset__') and col.endswith('_count')
+]
+
+if dataset_cols:
+    dataset_names = [col[len('dataset__'):-len('_count')] for col in dataset_cols]
+    dataset_counts = cluster_info[dataset_cols].to_numpy(dtype=float)
+    row_sums = dataset_counts.sum(axis=1, keepdims=True)
+    dataset_prop = np.divide(
+        dataset_counts,
+        row_sums,
+        out=np.zeros_like(dataset_counts),
+        where=row_sums > 0
+    )
+
+    fig_w = max(9, min(24, 0.6 * len(cluster_labels) + 4))
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
+    bottom = np.zeros(len(cluster_labels))
+    colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(dataset_names))))
+
+    for i, dataset in enumerate(dataset_names):
+        values = dataset_prop[:, i]
+        ax.bar(cluster_labels, values, bottom=bottom, width=0.8, color=colors[i], label=dataset)
+        bottom += values
+
+    ax.set_title('Dataset Composition by Cluster (Stacked Proportions)')
+    ax.set_xlabel('Cluster ID')
+    ax.set_ylabel('Proportion within cluster')
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis='x', rotation=45)
+    ax.legend(title='Dataset', bbox_to_anchor=(1.02, 1), loc='upper left', frameon=False)
+    plt.tight_layout()
+    plt.savefig('hdbscan_dataset_composition_stacked_bar.png', dpi=300)
+    plt.close()
+else:
+    save_placeholder(
+        'hdbscan_dataset_composition_stacked_bar.png',
+        'Dataset Composition (Stacked)',
+        'No dataset count columns found in cluster info TSV.'
+    )
+
+
+# -----------------------------------------------------
+# Plot 3: Genofeature composition stacked bar chart
+# -----------------------------------------------------
+if genofeature_cols:
+    genofeature_counts = cluster_info[genofeature_cols].to_numpy(dtype=float)
+    row_sums = genofeature_counts.sum(axis=1, keepdims=True)
+    genofeature_prop = np.divide(
+        genofeature_counts,
+        row_sums,
+        out=np.zeros_like(genofeature_counts),
+        where=row_sums > 0
+    )
+
+    genofeature_names = [col[:-6] for col in genofeature_cols]
+    fig_w = max(9, min(24, 0.6 * len(cluster_labels) + 4))
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
+    bottom = np.zeros(len(cluster_labels))
+    colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(genofeature_names))))
+
+    for i, genofeature in enumerate(genofeature_names):
+        values = genofeature_prop[:, i]
+        ax.bar(cluster_labels, values, bottom=bottom, width=0.8, color=colors[i], label=genofeature)
+        bottom += values
+
+    ax.set_title('Genofeature Composition by Cluster (Stacked Proportions)')
+    ax.set_xlabel('Cluster ID')
+    ax.set_ylabel('Proportion within cluster')
+    ax.set_ylim(0, 1)
+    ax.tick_params(axis='x', rotation=45)
+    ax.legend(title='Genofeature', bbox_to_anchor=(1.02, 1), loc='upper left', frameon=False)
+    plt.tight_layout()
+    plt.savefig('hdbscan_genofeature_composition_stacked_bar.png', dpi=300)
+    plt.close()
+else:
+    save_placeholder(
+        'hdbscan_genofeature_composition_stacked_bar.png',
+        'Genofeature Composition (Stacked)',
+        'No genofeature count columns found in cluster info TSV.'
+    )
+    """
+}
+
+
 process ZEROFIVEC {
     publishDir "${params.outdir}/clusters_imgs",
         mode: 'copy'

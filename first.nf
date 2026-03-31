@@ -21,13 +21,7 @@ process PHIDRA {
     container "containers/phidra/phidra.sif"
     label 'standard'
     publishDir "${params.outdir}/${meta.id}/phidra",
-        mode: 'copy',
-        saveAs: { filename ->
-            if (filename.endsWith("full_proteins.fa")) "validated_sequences/${filename}"
-            else if (filename.contains("hits.tsv")) "mmseqs_results/${filename}"
-            else if (filename == "pfam_validated_merged_report.tsv") "pfam/${filename}"
-            else null
-        }
+        mode: 'copy'
 
     input:
         tuple val(meta), path(fasta), path(subject_db)
@@ -35,8 +29,9 @@ process PHIDRA {
     output:
         tuple val(meta), 
               path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
-              path("*/mmseqs/initial/hits.tsv"),
               path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
+              path("*/mmseqs/initial/hits.tsv"),
+              path("*/mmseqs/recursive/hits.tsv"),
               emit: results
 
     script:
@@ -56,12 +51,13 @@ process PHIDRA {
         -f ${meta.protein} \\
         -o \$WORK_DIR \\
         -t ${task.cpus}
-
-   # if [ ! -f "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv" ]; then
-     #   mkdir -p "\$WORK_DIR/output/mmseqs_results/recursive_search"
-      #  echo -e "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score" > \
-      #      "\$WORK_DIR/${meta.protein}/mmseqs_results/recursive_search/${meta.protein}_TopHit_Evalue.tsv"
-   # fi
+    
+    if [ ! -s "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv" ]; then
+        echo "recursive hits.tsv does not exist, creating it."
+        mkdir -p "\$WORK_DIR/${meta.protein}/mmseqs/recursive"
+        printf "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score\n" \
+            > "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv"
+    fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -275,14 +271,19 @@ process ANALYZE_AND_PLOT {
         try:
             return int(raw)
         except Exception:
-            return int(orf_coord_default)
+            return -3
 
     def compute_orf_length(orf_id, drop):
         parts = str(orf_id).split('_')
-        if drop < 2:
-            return None
         start_idx = drop
         end_idx = drop + 1
+
+        # Support both positive and negative indices while ensuring both fields exist.
+        if not (-len(parts) <= start_idx < len(parts)):
+            return None
+        if not (-len(parts) <= end_idx < len(parts)):
+            return None
+
         try:
             start = int(parts[start_idx])
             end = int(parts[end_idx])
@@ -299,8 +300,12 @@ process ANALYZE_AND_PLOT {
         drop = get_drop(meta_dataset)
         df['ORF_length'] = df['orf_id'].apply(lambda x: compute_orf_length(x, drop))
 
+    # Keep only valid numeric lengths for statistics and plotting.
+    df['ORF_length'] = pd.to_numeric(df['ORF_length'], errors='coerce')
+    plot_df = df.dropna(subset=['ORF_length']).copy()
+
     # Generate basic statistics
-    stats = df.groupby('genofeature').agg({
+    stats = plot_df.groupby('genofeature').agg({
         'ORF_length': ['count', 'mean', 'min', 'max']
     }).reset_index()
     
@@ -315,26 +320,42 @@ process ANALYZE_AND_PLOT {
     plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
     
     # Create boxplot using seaborn
-    sns.boxplot(data=df, x='ORF_length', y='genofeature', 
-               orient='h', color='skyblue')
+    if not plot_df.empty:
+        sns.boxplot(
+            data=plot_df,
+            x='ORF_length',
+            y='genofeature',
+            order=stats['genofeature'].tolist(),
+            orient='h',
+            color='skyblue'
+        )
     
     # Add annotations
-    for i, row in stats.iterrows():
-        # Count annotation (left)
-        plt.annotate(f"N={int(row['count'])}",
-            xy=(row['min_length'], i),
-            xytext=(-10, 0),
-            textcoords='offset points',
-            ha='right', va='center',
-            fontsize=9, color='blue')
-        
-        # Mean annotation (right)
-        plt.annotate(f"Mean={row['mean_length']:.1f}",
-            xy=(row['max_length'], i),
-            xytext=(10, 0),
-            textcoords='offset points',
-            ha='left', va='center',
-            fontsize=9, color='green')
+        for i, row in stats.iterrows():
+            # Count annotation (left)
+            plt.annotate(f"N={int(row['count'])}",
+                xy=(row['min_length'], i),
+                xytext=(-10, 0),
+                textcoords='offset points',
+                ha='right', va='center',
+                fontsize=9, color='blue')
+            
+            # Mean annotation (right)
+            plt.annotate(f"Mean={row['mean_length']:.1f}",
+                xy=(row['max_length'], i),
+                xytext=(10, 0),
+                textcoords='offset points',
+                ha='left', va='center',
+                fontsize=9, color='green')
+    else:
+        plt.text(
+            0.5,
+            0.5,
+            'No valid ORF lengths available for plotting',
+            ha='center',
+            va='center',
+            transform=plt.gca().transAxes
+        )
     
     plt.title("Length Distribution by genofeature")
     plt.xlabel("ORF Length (aa)")
@@ -376,6 +397,35 @@ process PASV_POST {
     import os
     import re
 
+    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
+    meta_dataset = "${meta.id}"
+
+    def get_drop(dataset):
+        raw = orf_coord_map.get(dataset)
+        if raw is None:
+            raw = orf_coord_map.get(dataset.upper())
+        try:
+            return int(raw)
+        except Exception:
+            return -3
+
+    def compute_orf_length(orf_id, drop):
+        parts = str(orf_id).split('_')
+        start_idx = drop
+        end_idx = drop + 1
+
+        if not (-len(parts) <= start_idx < len(parts)):
+            return None
+        if not (-len(parts) <= end_idx < len(parts)):
+            return None
+
+        try:
+            start = int(parts[start_idx])
+            end = int(parts[end_idx])
+            return (abs(end - start) + 1) // 3
+        except Exception:
+            return None
+
     raw_expected = '${meta.expected_sigs}'
     tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
     expected_sigs = set(t.upper() for t in tokens if t)
@@ -393,10 +443,10 @@ process PASV_POST {
     processed_df = df[~df['signature'].str.contains('-')].copy()
     print(f"After removing gaps: {processed_df.shape}")
 
-    # Calculate ORF length
-    processed_df['orf_length'] = processed_df['name'].apply(
-        lambda x: (abs(int(x.split('_')[2]) - int(x.split('_')[1])) + 1) // 3
-    )
+    # Calculate ORF length using dataset-specific coordinate indices from nextflow config.
+    drop = get_drop(meta_dataset)
+    processed_df['orf_length'] = processed_df['name'].apply(lambda x: compute_orf_length(x, drop))
+    processed_df = processed_df.dropna(subset=['orf_length']).copy()
 
     # Create span classes based on spans_start and spans_end columns
     processed_df['span_class'] = processed_df.apply(
@@ -659,7 +709,8 @@ process ANNOTATE_HITS {
     input:
     tuple val(meta), 
           path(pfam_validated_fasta),
-          path(initial_search, stageAs: 'initial_search.tsv')
+          path(initial_search, stageAs: 'initial_search.tsv'),
+          path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
     tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
@@ -674,6 +725,11 @@ import json
 
 orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
 meta_dataset = "${meta.id}"
+protein = "${meta.protein}"
+
+pfam_validated_fasta = "${pfam_validated_fasta}"
+file1_path = "initial_search.tsv"
+output_file = "${meta.protein}_annotated_hits.tsv"
 
 def get_drop(dataset):
     raw = orf_coord_map.get(dataset)
@@ -683,11 +739,6 @@ def get_drop(dataset):
         return int(raw)
     except Exception:
         return int(orf_coord_default)
-
-protein = "${meta.protein}"
-pfam_validated_fasta = "${pfam_validated_fasta}"
-file1_path = "initial_search.tsv"
-output_file = "${meta.protein}_annotated_hits.tsv"
 
 def load_validated_ids():
     validated_ids = set()
