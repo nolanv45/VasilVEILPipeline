@@ -12,7 +12,7 @@ process CLEAN_FASTA_HEADERS {
 
     script:
     """
-    awk 'BEGIN{RS=">"; ORS=""} NR>1{n=index(\$0, "\\n"); header=substr(\$0,1,n-1); gsub(/\\./, "-", header); seq=substr(\$0,n+1); gsub(/\\n/, "", seq); gsub(/\\*/, "", seq); print ">"header"\\n"seq"\\n"}' ${fasta} > "${meta.id}_cleaned.fasta"
+    awk 'BEGIN{RS=">"; ORS=""} NR>1{n=index(\$0, "\\n"); header=substr(\$0,1,n-1); sub(/[[:space:]].*/, "", header); gsub(/\\./, "-", header); gsub(/[^A-Za-z0-9_-]/, "", header); if (header == "") header = "seq_" NR; seq=substr(\$0,n+1); gsub(/\\n/, "", seq); gsub(/\\*/, "", seq); print ">"header"\\n"seq"\\n"}' ${fasta} > "${meta.id}_cleaned.fasta"
     """
 }
 
@@ -245,7 +245,7 @@ process ANALYZE_AND_PLOT {
         }
 
     input:
-        tuple val(meta), path(input_tsv)
+        tuple val(meta), path(input_tsv), path(metadata_file)
 
     output:
         tuple val(meta), 
@@ -259,50 +259,46 @@ process ANALYZE_AND_PLOT {
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
-    import json
+    from Bio import SeqIO
+    import os
 
-    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-    meta_dataset = "${meta.id}"
-
-    def get_drop(dataset):
-        raw = orf_coord_map.get(dataset)
-        if raw is None:
-            raw = orf_coord_map.get(dataset.upper())
+    def load_sequence_lengths(fasta_path):
+        lengths = {}
         try:
-            return int(raw)
-        except Exception:
-            return -3
+            for record in SeqIO.parse(fasta_path, 'fasta'):
+                lengths[record.id] = len(record.seq)
+        except Exception as e:
+            print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}")
+        return lengths
 
-    def compute_orf_length(orf_id, drop):
-        parts = str(orf_id).split('_')
-        start_idx = drop
-        end_idx = drop + 1
-
-        # Support both positive and negative indices while ensuring both fields exist.
-        if not (-len(parts) <= start_idx < len(parts)):
-            return None
-        if not (-len(parts) <= end_idx < len(parts)):
-            return None
-
+    def load_genofeature_colors(metadata_path):
+        if not metadata_path or not os.path.exists(metadata_path):
+            print(f"WARNING: metadata file not found for colors: {metadata_path}")
+            return {}, {}
         try:
-            start = int(parts[start_idx])
-            end = int(parts[end_idx])
-            return (abs(end - start) + 1) // 3
-        except Exception:
-            return None
+            meta = pd.read_csv(metadata_path, sep='\t', dtype=str).fillna('')
+            if 'genofeature' not in meta.columns or 'color' not in meta.columns:
+                print("WARNING: metadata missing 'genofeature' or 'color' columns")
+                return {}, {}
+            color_map = dict(zip(meta['genofeature'], meta['color']))
+            color_map_lower = {k.lower(): v for k, v in color_map.items()}
+            return color_map, color_map_lower
+        except Exception as e:
+            print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}")
+            return {}, {}
 
     # Read and process input data
     df = pd.read_csv("${input_tsv}", sep='\\t')
     print(f"Processing data with {len(df)} entries")
 
-    # Calculate ORF length if not present
-    if 'ORF_length' not in df.columns:
-        drop = get_drop(meta_dataset)
-        df['ORF_length'] = df['orf_id'].apply(lambda x: compute_orf_length(x, drop))
+    # Always compute ORF length from sequence to avoid header naming inconsistencies.
+    seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+    df['ORF_length'] = df['orf_id'].map(seq_lengths)
 
     # Keep only valid numeric lengths for statistics and plotting.
     df['ORF_length'] = pd.to_numeric(df['ORF_length'], errors='coerce')
     plot_df = df.dropna(subset=['ORF_length']).copy()
+    color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
 
     # Generate basic statistics
     stats = plot_df.groupby('genofeature').agg({
@@ -321,14 +317,24 @@ process ANALYZE_AND_PLOT {
     
     # Create boxplot using seaborn
     if not plot_df.empty:
+        ordered_features = stats['genofeature'].tolist()
+        feature_palette = {
+            feat: color_map.get(feat, color_map_lower.get(str(feat).lower(), '#808080'))
+            for feat in ordered_features
+        }
         sns.boxplot(
             data=plot_df,
             x='ORF_length',
             y='genofeature',
-            order=stats['genofeature'].tolist(),
+            order=ordered_features,
+            hue='genofeature',
+            palette=feature_palette,
             orient='h',
-            color='skyblue'
+            dodge=False
         )
+        legend = plt.gca().get_legend()
+        if legend is not None:
+            legend.remove()
     
     # Add annotations
         for i, row in stats.iterrows():
@@ -376,7 +382,7 @@ process PASV_POST {
         pattern: "*.{tsv,png}"
 
     input:
-        tuple val(meta), path(pasv_file)
+        tuple val(meta), path(pasv_file), path(metadata_file)
 
     output:
         tuple val(meta),
@@ -391,40 +397,36 @@ process PASV_POST {
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
-    import json
+    from Bio import SeqIO
     import math
     import sys
     import os
     import re
 
-    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-    meta_dataset = "${meta.id}"
-
-    def get_drop(dataset):
-        raw = orf_coord_map.get(dataset)
-        if raw is None:
-            raw = orf_coord_map.get(dataset.upper())
+    def load_sequence_lengths(fasta_path):
+        lengths = {}
         try:
-            return int(raw)
-        except Exception:
-            return -3
+            for record in SeqIO.parse(fasta_path, 'fasta'):
+                lengths[record.id] = len(record.seq)
+        except Exception as e:
+            print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}", file=sys.stderr)
+        return lengths
 
-    def compute_orf_length(orf_id, drop):
-        parts = str(orf_id).split('_')
-        start_idx = drop
-        end_idx = drop + 1
-
-        if not (-len(parts) <= start_idx < len(parts)):
-            return None
-        if not (-len(parts) <= end_idx < len(parts)):
-            return None
-
+    def load_genofeature_colors(metadata_path):
+        if not metadata_path or not os.path.exists(metadata_path):
+            print(f"WARNING: metadata file not found for colors: {metadata_path}", file=sys.stderr)
+            return {}, {}
         try:
-            start = int(parts[start_idx])
-            end = int(parts[end_idx])
-            return (abs(end - start) + 1) // 3
-        except Exception:
-            return None
+            meta = pd.read_csv(metadata_path, sep='\t', dtype=str).fillna('')
+            if 'genofeature' not in meta.columns or 'color' not in meta.columns:
+                print("WARNING: metadata missing 'genofeature' or 'color' columns", file=sys.stderr)
+                return {}, {}
+            color_map = dict(zip(meta['genofeature'], meta['color']))
+            color_map_lower = {k.lower(): v for k, v in color_map.items()}
+            return color_map, color_map_lower
+        except Exception as e:
+            print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}", file=sys.stderr)
+            return {}, {}
 
     raw_expected = '${meta.expected_sigs}'
     tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
@@ -443,10 +445,11 @@ process PASV_POST {
     processed_df = df[~df['signature'].str.contains('-')].copy()
     print(f"After removing gaps: {processed_df.shape}")
 
-    # Calculate ORF length using dataset-specific coordinate indices from nextflow config.
-    drop = get_drop(meta_dataset)
-    processed_df['orf_length'] = processed_df['name'].apply(lambda x: compute_orf_length(x, drop))
+    # Derive ORF lengths from actual amino-acid sequences, not ORF header naming.
+    seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+    processed_df['orf_length'] = processed_df['name'].map(seq_lengths)
     processed_df = processed_df.dropna(subset=['orf_length']).copy()
+    color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
 
     # Create span classes based on spans_start and spans_end columns
     processed_df['span_class'] = processed_df.apply(
@@ -501,14 +504,24 @@ process PASV_POST {
         span_data = processed_df[processed_df['span_class'] == span]
         
         if not span_data.empty:
+            signature_palette = {
+                sig: color_map.get(sig, color_map_lower.get(str(sig).lower(), '#808080'))
+                for sig in signature_order
+            }
             # Create boxplot
             sns.boxplot(data=span_data,
                        x='orf_length',
                        y='signature',
                        order=signature_order,
+                       hue='signature',
+                       palette=signature_palette,
                        orient='h',
                        ax=ax,
-                       color='skyblue')
+                       dodge=False)
+
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.remove()
 
             # Add statistics
             span_stats = stats[stats['span_class'] == span]
@@ -726,9 +739,11 @@ import json
 orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
 meta_dataset = "${meta.id}"
 protein = "${meta.protein}"
+orf_coord_default = -3
 
 pfam_validated_fasta = "${pfam_validated_fasta}"
 file1_path = "initial_search.tsv"
+file2_path = "recursive_search.tsv"
 output_file = "${meta.protein}_annotated_hits.tsv"
 
 def get_drop(dataset):
@@ -756,31 +771,69 @@ def parse_contig_orf(query_id):
 def get_signature(target_id):
     return target_id.split("_")[0]
 
-def process_files(file1_path, validated_ids):
+def process_files(file_path, validated_ids, source_type="Top_Hit_Annotation", query_label_map=None):
     results = []
-    with open(file1_path, "r") as f:
+    if not os.path.exists(file_path):
+        print(f"Warning: {file_path} does not exist")
+        return results
+    with open(file_path, "r") as f:
         next(f)
         for line in f:
             parts = line.strip().split("\\t")
+            if len(parts) < 2:
+                continue
             query_id = parts[0]
             target_id = parts[1]
             if query_id in validated_ids:
                 contig_id, orf_id = parse_contig_orf(query_id)
-                signature = get_signature(target_id)
-                results.append((contig_id, orf_id, signature, "Top_Hit_Annotation"))
+                if source_type == "Recursive_Hit_Annotation" and query_label_map is not None:
+                    # Recursive Target_ID points to sequence IDs from the recursive DB.
+                    # Map by recursive target first, then fallback to query, then raw target prefix.
+                    signature = query_label_map.get(target_id)
+                    if signature is None:
+                        signature = query_label_map.get(query_id, get_signature(target_id))
+                else:
+                    signature = get_signature(target_id)
+                results.append((contig_id, orf_id, signature, source_type, query_id))
     return results
 
 def main():
     print("DEBUG - Current directory:", os.getcwd())
     validated_ids = load_validated_ids()
     print("DEBUG - Files in directory:", os.listdir("."))
-    print("DEBUG - Processing files:", file1_path)
-    results = process_files(file1_path, validated_ids)
+
+    # Process both initial and recursive search results
+    initial_results = process_files(file1_path, validated_ids, "Top_Hit_Annotation")
+
+    # Build initial mapping: initial Query_ID -> initial top-hit label.
+    query_to_initial_label = {}
+    for contig_id, orf_id, signature, identified, query_id in initial_results:
+        if query_id not in query_to_initial_label:
+            query_to_initial_label[query_id] = signature
+
+    recursive_results = process_files(
+        file2_path,
+        validated_ids,
+        "Recursive_Hit_Annotation",
+        query_label_map=query_to_initial_label,
+    )
+
+    # Combine and deduplicate - keep Top_Hit if both exist
+    result_dict = {}
+    for contig_id, orf_id, signature, identified, query_id in initial_results:
+        key = (contig_id, orf_id, signature)
+        result_dict[key] = (contig_id, orf_id, signature, identified)
+    for contig_id, orf_id, signature, identified, query_id in recursive_results:
+        key = (contig_id, orf_id, signature)
+        if key not in result_dict:
+            result_dict[key] = (contig_id, orf_id, signature, identified)
+
+    print(f"Processing initial: {len(initial_results)}, recursive: {len(recursive_results)}, combined: {len(result_dict)}")
+
     with open(output_file, "w") as f:
         f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
-        for contig_id, orf_id, signature, identified in results:
+        for contig_id, orf_id, signature, identified in result_dict.values():
             f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
-    print(f"Results have been saved to: {output_file}")
 
 if __name__ == "__main__":
     main()

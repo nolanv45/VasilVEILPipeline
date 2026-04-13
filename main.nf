@@ -53,6 +53,8 @@ workflow FIRST_RUN {
         ch_dataset
 
     main:
+        ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
         CLEAN_FASTA_HEADERS(ch_dataset)
          
         ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
@@ -105,7 +107,13 @@ workflow FIRST_RUN {
         )
         PASV(ch_pasv)
 
-        PASV_POST(PASV.out.results)
+        ch_pasv_post_input = PASV.out.results
+            .combine(ch_metadata)
+            .map { meta, pasv_file, metadata_file ->
+                tuple(meta, pasv_file, metadata_file)
+            }
+
+        PASV_POST(ch_pasv_post_input)
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
         DOMAIN_MATCH(ch_branched.pfam
             .map { meta, fasta, pfam, init, recurs -> 
@@ -129,7 +137,13 @@ workflow FIRST_RUN {
 
         COMBINE_PHIDRA_TSV(ch_phidra_results)
 
-        ANALYZE_AND_PLOT(COMBINE_PHIDRA_TSV.out.combined)
+        ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
+            .combine(ch_metadata)
+            .map { meta, combined_file, metadata_file ->
+                tuple(meta, combined_file, metadata_file)
+            }
+
+        ANALYZE_AND_PLOT(ch_analyze_input)
 
         ch_pasv_map = PASV_POST.out
             .map { meta, processed_file, stats_file, plot_file ->
@@ -171,7 +185,12 @@ workflow FIRST_RUN {
         ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
             STANDARDIZE_OUTPUTS.out
         )
+
+        // Barrier token: count() emits only after split channel is fully complete
+        ch_split_ready = ch_split_by_genofeature.count()
         ch_combined_tsv = COMBINE_DATASETS.out.combined
+            .combine(ch_split_ready)
+            .map { combined_tsv, split_count -> combined_tsv }
 
     emit:
         ch_combined_tsv
@@ -230,7 +249,7 @@ workflow THIRD_RUN {
     MODIFY_CLUSTERS("${params.outdir}/hdbscan/clusters_csv")
     
     HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
-    HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info)
+    HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info, ch_metadata)
     // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
 
     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
