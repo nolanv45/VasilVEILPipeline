@@ -501,11 +501,13 @@ process HDBSCAN_VISUALS {
 
     input:
         path cluster_info_tsv
+        path metadata_file
 
     output:
         path "hdbscan_cluster_composition_heatmap.png", emit: composition_heatmap
         path "hdbscan_dataset_composition_stacked_bar.png", emit: dataset_stacked
         path "hdbscan_genofeature_composition_stacked_bar.png", emit: genofeature_stacked
+        path "hdbscan_genofeature_composition_size_scaled_stacked_bar.png", emit: genofeature_size_scaled
 
     script:
     """
@@ -527,6 +529,12 @@ def save_placeholder(output_file, title, message):
 
 cluster_info = pd.read_csv("${cluster_info_tsv}", sep='\t')
 
+metadata_df = pd.read_csv("${metadata_file}", sep='\t')
+if 'genofeature' in metadata_df.columns and 'color' in metadata_df.columns:
+    metadata_color_map = dict(zip(metadata_df['genofeature'], metadata_df['color']))
+else:
+    metadata_color_map = {}
+
 if cluster_info.empty:
     save_placeholder(
         "hdbscan_cluster_composition_heatmap.png",
@@ -541,6 +549,11 @@ if cluster_info.empty:
     save_placeholder(
         "hdbscan_genofeature_composition_stacked_bar.png",
         "Genofeature Composition (Stacked)",
+        "No clustered points available (all points are unclustered, cluster_label = -1)."
+    )
+    save_placeholder(
+        "hdbscan_genofeature_composition_size_scaled_stacked_bar.png",
+        "Genofeature Composition (Size-Scaled)",
         "No clustered points available (all points are unclustered, cluster_label = -1)."
     )
     raise SystemExit(0)
@@ -657,11 +670,12 @@ if genofeature_cols:
     fig_w = max(9, min(24, 0.6 * len(cluster_labels) + 4))
     fig, ax = plt.subplots(figsize=(fig_w, 6))
     bottom = np.zeros(len(cluster_labels))
-    colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(genofeature_names))))
+    fallback_colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(genofeature_names))))
 
     for i, genofeature in enumerate(genofeature_names):
         values = genofeature_prop[:, i]
-        ax.bar(cluster_labels, values, bottom=bottom, width=0.8, color=colors[i], label=genofeature)
+        color = metadata_color_map.get(genofeature, fallback_colors[i])
+        ax.bar(cluster_labels, values, bottom=bottom, width=0.8, color=color, label=genofeature)
         bottom += values
 
     ax.set_title('Genofeature Composition by Cluster (Stacked Proportions)')
@@ -677,6 +691,48 @@ else:
     save_placeholder(
         'hdbscan_genofeature_composition_stacked_bar.png',
         'Genofeature Composition (Stacked)',
+        'No genofeature count columns found in cluster info TSV.'
+    )
+
+
+# -----------------------------------------------------
+# Plot 4: Genofeature composition stacked by cluster-size proportion
+# -----------------------------------------------------
+if genofeature_cols:
+    genofeature_counts = cluster_info[genofeature_cols].to_numpy(dtype=float)
+    cluster_sizes = genofeature_counts.sum(axis=1)
+    total_clustered = cluster_sizes.sum()
+
+    if total_clustered > 0:
+        genofeature_global_prop = genofeature_counts / total_clustered
+    else:
+        genofeature_global_prop = np.zeros_like(genofeature_counts)
+
+    genofeature_names = [col[:-6] for col in genofeature_cols]
+    fig_w = max(9, min(24, 0.6 * len(cluster_labels) + 4))
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
+    bottom = np.zeros(len(cluster_labels))
+    fallback_colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(genofeature_names))))
+
+    for i, genofeature in enumerate(genofeature_names):
+        values = genofeature_global_prop[:, i]
+        color = metadata_color_map.get(genofeature, fallback_colors[i])
+        ax.bar(cluster_labels, values, bottom=bottom, width=0.8, color=color, label=genofeature)
+        bottom += values
+
+    ax.set_title('Genofeature Composition by Cluster (Height Scaled by Cluster Size)')
+    ax.set_xlabel('Cluster ID')
+    ax.set_ylabel('Proportion of all clustered members')
+    ax.set_ylim(0, max(0.05, bottom.max() * 1.1 if len(bottom) else 0.05))
+    ax.tick_params(axis='x', rotation=45)
+    ax.legend(title='Genofeature', bbox_to_anchor=(1.02, 1), loc='upper left', frameon=False)
+    plt.tight_layout()
+    plt.savefig('hdbscan_genofeature_composition_size_scaled_stacked_bar.png', dpi=300)
+    plt.close()
+else:
+    save_placeholder(
+        'hdbscan_genofeature_composition_size_scaled_stacked_bar.png',
+        'Genofeature Composition (Size-Scaled)',
         'No genofeature count columns found in cluster info TSV.'
     )
     """
