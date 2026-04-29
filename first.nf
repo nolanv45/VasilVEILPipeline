@@ -30,6 +30,8 @@ process PHIDRA {
         tuple val(meta), 
               path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
               path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
+              path("*/final_results/unvalidated_ida_pfams/full_proteins.fa"), 
+              path("*/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv"),
               path("*/mmseqs/initial/hits.tsv"),
               path("*/mmseqs/recursive/hits.tsv"),
               emit: results
@@ -189,17 +191,19 @@ process PASV {
         pattern: "pasv_output/output/*.tsv"
 
     input:
-        tuple val(meta), path(fasta), path(align_refs)
+        tuple val(meta), path(val_fasta, stageAs: 'val_full.fa'), path(unval_fasta, stageAs: 'unval_full.fa'), path(align_refs)
 
     output:
         tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
 
     script:
     """
+    
     mkdir -p pasv_output/{input,output,pasv}
 
     # Prepare input files
-    cp "${fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
+    # cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
+    cp "${val_fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
     # Setup PASV
