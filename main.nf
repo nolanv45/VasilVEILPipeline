@@ -138,10 +138,11 @@ workflow FIRST_RUN {
 
         ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
         ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
+        ch_domain_annotate_map = DOMAIN_MATCH.out.results ?: Channel.empty()
         
         // Combine channels
         ch_phidra_results = ch_annotate
-            .mix(ch_phidra_only)
+            .mix(ch_phidra_only, ch_domain_annotate_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)  // Add grouping key
             }
@@ -165,16 +166,11 @@ workflow FIRST_RUN {
                 tuple(meta, processed_file)
             }
 
-        ch_domain_annotate_map = DOMAIN_MATCH.out.results
-            .map { meta, processed_file ->
-                tuple(meta, processed_file)
-            }
-
         ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
         ch_pasv_map = ch_pasv_map ?: Channel.empty()
 
         ch_files_to_standardize = ch_combined_phidra
-            .mix(ch_pasv_map, ch_domain_annotate_map)
+            .mix(ch_pasv_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }
@@ -219,7 +215,7 @@ workflow SECOND_RUN {
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-    ch_embedding_targets = ch_combined_tsv
+    ch_embedding_targets_from_tsv = ch_combined_tsv
         .splitCsv(header: true, sep: '\t')
         .map { row ->
             def dataset_id = row.dataset?.toString()?.trim()
@@ -229,6 +225,19 @@ workflow SECOND_RUN {
             }
             tuple(dataset_id, protein_name)
         }
+        .unique()
+
+    ch_embedding_targets_from_fs = Channel
+        .fromPath("${params.outdir}/*/files_for_embeddings/*", type: 'dir')
+        .map { protein_dir ->
+            def protein_name = protein_dir.getName()
+            def dataset_id = protein_dir.getParent().getParent().getName()
+            tuple(dataset_id, protein_name)
+        }
+        .unique()
+
+    ch_embedding_targets = ch_embedding_targets_from_tsv
+        .mix(ch_embedding_targets_from_fs)
         .unique()
         .map { dataset_id, protein_name ->
             def protein_dir = file("${params.outdir}/${dataset_id}/files_for_embeddings/${protein_name}")
