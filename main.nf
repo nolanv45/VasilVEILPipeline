@@ -69,7 +69,7 @@ workflow FIRST_RUN {
                     cleaned_fasta: fasta
                 ]
                 // stage the subject DB file so Nextflow copies it into the task workdir
-                tuple(new_meta, fasta, file(protein_config.subjectDB))
+                tuple(new_meta, fasta, file(protein_config.subjectDB), file(protein_config.pfamDomain))
             }
 
         PHIDRA(ch_dataset_proteins)
