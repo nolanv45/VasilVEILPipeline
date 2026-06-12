@@ -24,7 +24,7 @@ process PHIDRA {
         mode: 'copy'
 
     input:
-        tuple val(meta), path(fasta), path(subject_db), path(pfamDomain)
+        tuple val(meta), path(fasta), path(subject_db), path(pfamIDA)
 
     output:
         tuple val(meta), 
@@ -39,13 +39,17 @@ process PHIDRA {
     script:
     """
     WORK_DIR=\$PWD
+    # source /etc/profile.d/conda.sh
 
-    # Launch PHIDRA directly via its shebang-enabled script.
-    ${baseDir}/bin/phidra/phidra_run.py \
-        -i ${fasta} \\
-        -db ${subject_db} \\
+    cd ${params.phidra_dir}
+
+    INPUT_FASTA=\$WORK_DIR/${fasta}
+
+    python phidra_run.py \\
+        -i \$INPUT_FASTA \\
+        -db \$WORK_DIR/${subject_db} \\
         -pfam ${params.pfamDB} \\
-        -ida ${pfamDomain} \
+        -ida \$WORK_DIR/${pfamIDA} \\
         -f ${meta.protein} \\
         -o \$WORK_DIR \\
         -t ${task.cpus}
@@ -56,7 +60,6 @@ process PHIDRA {
         printf "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score\n" \
             > "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv"
     fi
-    
     """
 }
 
