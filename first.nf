@@ -41,12 +41,10 @@ process PHIDRA {
     WORK_DIR=\$PWD
     # source /etc/profile.d/conda.sh
 
-    cd ${params.phidra_dir}
+    # cd ${params.phidra_dir}
 
-    INPUT_FASTA=\$WORK_DIR/${fasta}
-
-    python phidra_run.py \\
-        -i \$INPUT_FASTA \\
+    python ${workflow.projectDir}/bin/phidra/phidra_run.py \\
+        -i \$WORK_DIR/${fasta} \\
         -db \$WORK_DIR/${subject_db} \\
         -pfam ${params.pfamDB} \\
         -ida \$WORK_DIR/${pfamIDA} \\
