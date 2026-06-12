@@ -39,15 +39,12 @@ process PHIDRA {
     script:
     """
     WORK_DIR=\$PWD
-    # source /etc/profile.d/conda.sh
-
-    # cd ${params.phidra_dir}
 
     python ${workflow.projectDir}/bin/phidra/phidra_run.py \\
-        -i \$WORK_DIR/${fasta} \\
-        -db \$WORK_DIR/${subject_db} \\
+        -i ${fasta} \\
+        -db ${subject_db} \\
         -pfam ${params.pfamDB} \\
-        -ida \$WORK_DIR/${pfamIDA} \\
+        -ida ${pfamIDA} \\
         -f ${meta.protein} \\
         -o \$WORK_DIR \\
         -t ${task.cpus}
