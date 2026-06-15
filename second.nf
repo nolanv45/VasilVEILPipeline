@@ -9,65 +9,59 @@ process EMBEDDINGS {
     memory { 50.GB }
     
     input:
-        path combined_tsv
+        tuple val(meta), path(protein_dir)
         path model_folder
         
     output:
-        path "*", emit: embeddings_dirs
+        path "embeddings/${meta.id}/${meta.protein}", emit: embeddings_dirs
         
     script:
-    // Use dataset keys from params.datasets so EMBEDDINGS reads datasets defined in nextflow.config
-    def datasets_str = params.datasets.keySet().toList().collect { "\"${it}\"" }.join(' ')
     """
     #!/usr/bin/env bash
     set -euo pipefail
     
-    mkdir -p embeddings
-    echo "combined_tsv: ${combined_tsv}"
+    mkdir -p "embeddings/${meta.id}/${meta.protein}"
+    echo "dataset: ${meta.id}"
+    echo "protein: ${meta.protein}"
+    echo "protein_dir: ${protein_dir}"
     echo "model_folder: ${model_folder}"
 
-    # Process each protein directory
-    for dataset in ${datasets_str}; do
-        dataset_path="${params.outdir}/\$dataset/"
-        embedding_path="${params.outdir}/\$dataset/files_for_embeddings/"
+    for genofeature_dir in "${protein_dir}"/*; do
+        if [ -d "\$genofeature_dir" ]; then
+            genofeature=\$(basename "\$genofeature_dir")
+            echo "Processing genofeature directory: \$genofeature"
+            output_dir="embeddings/${meta.id}/${meta.protein}/\$genofeature"
+            mkdir -p "\$output_dir"
 
-        for protein_dir in "\$embedding_path"/*; do
-            if [ -d "\$protein_dir" ]; then
-                protein=\$(basename "\$protein_dir")
-                echo "Processing protein directory: \$protein"
-                mkdir -p "embeddings/\$dataset/\$protein"
+            for fasta in "\$genofeature_dir"/*.fasta; do
+                if [ -f "\$fasta" ]; then
+                    fasta_base=\$(basename "\$fasta" .fasta)
+                    existing_base_dir="${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature"
+                    expected_count=\$(grep -c '^>' "\$fasta" || true)
+                    existing_count=0
+                    if [ -d "\$existing_base_dir" ]; then
+                        existing_count=\$(find "\$existing_base_dir" -type f -path '*/batch_*/*.pt' 2>/dev/null | wc -l)
+                    fi
 
-                for genofeature_dir in "\$protein_dir"/*; do
-                    if [ -d "\$genofeature_dir" ]; then
-                            genofeature=\$(basename "\$genofeature_dir")
-                            echo "Processing genofeature directory: \$genofeature"
-                            output_dir="embeddings/\$dataset/\$protein/\$genofeature"
-                            mkdir -p "\$output_dir"
-                            #
-                            # Process FASTA files
-                            for fasta in "\$genofeature_dir"/*.fasta; do
-                                if [ -f "\$fasta" ]; then
-                                    fasta_base=\$(basename "\$fasta" .fasta)
-                                
-                                    # Check if embeddings exist (published under params.outdir)
-                                    if [ -d "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature/batch_0" ] && [ -n "\$(find "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature/batch_0" -name '*.pt' 2>/dev/null)" ]; then
-                                        echo "Using existing embeddings for \$fasta_base"
-                                        cp -r "${params.outdir}/embeddings/\$dataset/\$protein/\$genofeature" "embeddings/\$dataset/\$protein/"
-                                    else
-                                        echo "Generating embeddings for \$fasta_base"
-                                        python3 ${model_folder}/extract.py \\
-                                            ${model_folder}/esm2_t36_3B_UR50D.pt \\
-                                            "\$fasta" \\
-                                            "\$output_dir" \\
-                                            --repr_layers 36 \\
-                                            --include mean || exit 1
-                                    fi
-                                fi
-                            done
+                    # Reuse only when the existing embedding set appears complete for this fasta.
+                    if [ "\$expected_count" -gt 0 ] && [ "\$existing_count" -ge "\$expected_count" ]; then
+                        echo "Using existing embeddings for \$fasta_base"
+                        cp -r "${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature" "embeddings/${meta.id}/${meta.protein}/"
+                    else
+                        if [ "\$existing_count" -gt 0 ]; then
+                            echo "Found incomplete embeddings for \$fasta_base (have \$existing_count, expected \$expected_count); regenerating"
                         fi
-                done
-            fi
-        done
+                        echo "Generating embeddings for \$fasta_base"
+                        python3 ${model_folder}/extract.py \\
+                            ${model_folder}/esm2_t36_3B_UR50D.pt \\
+                            "\$fasta" \\
+                            "\$output_dir" \\
+                            --repr_layers 36 \\
+                            --include mean || exit 1
+                    fi
+                fi
+            done
+        fi
     done
     """
 }
@@ -766,12 +760,13 @@ process GENERATE_COORDINATES {
     memory { 50.GB }
     
     input:
-        path(embeddings)   
+        val embeddings_dirs
         
     output:
-        path "*", emit: coordinates_files
+        path "first_coordinates", emit: coordinates_files
         
     script:
+    def embeddingsJson = groovy.json.JsonOutput.toJson(embeddings_dirs.collect { embDir -> embDir.toString() })
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -781,6 +776,11 @@ process GENERATE_COORDINATES {
     chmod 1777 \$PWD/.numba_cache || true
     export NUMBA_CACHE_DIR=\$PWD/.numba_cache
 
+    # write embeddings list (safe from shell expansion)
+    cat > embeddings_list.json <<'JSON'
+${embeddingsJson}
+JSON
+
     # Run the Python script using the conda environment's python binary
     /opt/conda/envs/umap/bin/python - <<'PY'
 import os
@@ -789,6 +789,7 @@ import numpy as np
 import umap
 import random
 import pandas as pd
+import json
 from pathlib import Path
 
 # Create output directories
@@ -816,7 +817,7 @@ def load_embedding(file_path):
 def find_pt_files(base_dir):
     pt_files = []
     for root, _, files in os.walk(base_dir):
-        if 'batch_0' in root:
+        if Path(root).name.startswith('batch_'):
             for file in files:
                 if file.endswith('.pt'):
                     pt_files.append(os.path.join(root, file))
@@ -826,8 +827,13 @@ def find_pt_files(base_dir):
 embeddings = []
 embedding_ids = []
 
+import json as _json
+embedding_dirs = _json.load(open('embeddings_list.json'))
+
 # Find all .pt files
-pt_files = find_pt_files("${embeddings}")
+pt_files = []
+for embedding_dir in embedding_dirs:
+    pt_files.extend(find_pt_files(embedding_dir))
 print(f"Found {len(pt_files)} .pt files")
 
 # Process each .pt file

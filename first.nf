@@ -24,12 +24,14 @@ process PHIDRA {
         mode: 'copy'
 
     input:
-        tuple val(meta), path(fasta), path(subject_db)
+        tuple val(meta), path(fasta), path(subject_db), path(pfamIDA)
 
     output:
         tuple val(meta), 
               path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
               path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
+              path("*/final_results/unvalidated_ida_pfams/full_proteins.fa"), 
+              path("*/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv"),
               path("*/mmseqs/initial/hits.tsv"),
               path("*/mmseqs/recursive/hits.tsv"),
               emit: results
@@ -37,17 +39,12 @@ process PHIDRA {
     script:
     """
     WORK_DIR=\$PWD
-    # source /etc/profile.d/conda.sh
 
-    cd ${params.phidra_dir}
-
-    INPUT_FASTA=\$WORK_DIR/${fasta}
-
-    python phidra_run.py \\
-        -i \$INPUT_FASTA \\
-        -db \$WORK_DIR/${subject_db} \\
+    python ${workflow.projectDir}/bin/phidra/phidra_run.py \\
+        -i ${fasta} \\
+        -db ${subject_db} \\
         -pfam ${params.pfamDB} \\
-        -ida ${meta.pfamDomain} \\
+        -ida ${pfamIDA} \\
         -f ${meta.protein} \\
         -o \$WORK_DIR \\
         -t ${task.cpus}
@@ -58,11 +55,6 @@ process PHIDRA {
         printf "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score\n" \
             > "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv"
     fi
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        python: \$(python --version | sed 's/Python //')
-    END_VERSIONS
     """
 }
 
@@ -189,17 +181,19 @@ process PASV {
         pattern: "pasv_output/output/*.tsv"
 
     input:
-        tuple val(meta), path(fasta), path(align_refs)
+        tuple val(meta), path(val_fasta, stageAs: 'val_full.fa'), path(unval_fasta, stageAs: 'unval_full.fa'), path(align_refs)
 
     output:
         tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
 
     script:
     """
+    
     mkdir -p pasv_output/{input,output,pasv}
 
     # Prepare input files
-    cp "${fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
+    # cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
+    cp "${val_fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
     # Setup PASV
@@ -255,128 +249,137 @@ process ANALYZE_AND_PLOT {
 
     script:
     """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    from Bio import SeqIO
-    import os
+#!/usr/bin/env python3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from Bio import SeqIO
+import os
 
-    def load_sequence_lengths(fasta_path):
-        lengths = {}
-        try:
-            for record in SeqIO.parse(fasta_path, 'fasta'):
-                lengths[record.id] = len(record.seq)
-        except Exception as e:
-            print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}")
-        return lengths
+def load_sequence_lengths(fasta_path):
+    lengths = {}
+    try:
+        for record in SeqIO.parse(fasta_path, 'fasta'):
+            lengths[record.id] = len(record.seq)
+    except Exception as e:
+        print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}")
+    return lengths
 
-    def load_genofeature_colors(metadata_path):
-        if not metadata_path or not os.path.exists(metadata_path):
-            print(f"WARNING: metadata file not found for colors: {metadata_path}")
+def load_genofeature_colors(metadata_path):
+    if not metadata_path or not os.path.exists(metadata_path):
+        print(f"WARNING: metadata file not found for colors: {metadata_path}")
+        return {}, {}
+    try:
+        meta = pd.read_csv(metadata_path, sep='\\t', dtype=str).fillna('')
+        if 'genofeature' not in meta.columns or 'color' not in meta.columns:
+            print("WARNING: metadata missing 'genofeature' or 'color' columns")
             return {}, {}
-        try:
-            meta = pd.read_csv(metadata_path, sep='\t', dtype=str).fillna('')
-            if 'genofeature' not in meta.columns or 'color' not in meta.columns:
-                print("WARNING: metadata missing 'genofeature' or 'color' columns")
-                return {}, {}
-            color_map = dict(zip(meta['genofeature'], meta['color']))
-            color_map_lower = {k.lower(): v for k, v in color_map.items()}
-            return color_map, color_map_lower
-        except Exception as e:
-            print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}")
-            return {}, {}
+        color_map = dict(zip(meta['genofeature'], meta['color']))
+        color_map_lower = {k.lower(): v for k, v in color_map.items()}
+        return color_map, color_map_lower
+    except Exception as e:
+        print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}")
+        return {}, {}
 
-    # Read and process input data
-    df = pd.read_csv("${input_tsv}", sep='\\t')
-    print(f"Processing data with {len(df)} entries")
+# Read and process input data
+df = pd.read_csv("${input_tsv}", sep='\\t')
+print(f"Processing data with {len(df)} entries")
 
-    # Always compute ORF length from sequence to avoid header naming inconsistencies.
-    seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
-    df['ORF_length'] = df['orf_id'].map(seq_lengths)
+# Always compute ORF length from sequence to avoid header naming inconsistencies.
+seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+df['ORF_length'] = df['orf_id'].map(seq_lengths)
 
-    # Keep only valid numeric lengths for statistics and plotting.
-    df['ORF_length'] = pd.to_numeric(df['ORF_length'], errors='coerce')
-    plot_df = df.dropna(subset=['ORF_length']).copy()
-    color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
+# Keep only valid numeric lengths for statistics and plotting.
+df['ORF_length'] = pd.to_numeric(df['ORF_length'], errors='coerce')
+plot_df = df.dropna(subset=['ORF_length']).copy()
+color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
 
-    # Generate basic statistics
-    stats = plot_df.groupby('genofeature').agg({
-        'ORF_length': ['count', 'mean', 'min', 'max']
-    }).reset_index()
-    
-    # Flatten column names
-    stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_length']
-    stats = stats.sort_values('genofeature')
-    
-    # Save statistics
-    stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
+# Generate basic statistics
+stats = plot_df.groupby('genofeature').agg({
+    'ORF_length': ['count', 'mean', 'min', 'max']
+}).reset_index()
 
-    # Create plot
-    plt.figure(figsize=(10, max(6, len(stats) * 0.5)))
-    
-    # Create boxplot using seaborn
-    if not plot_df.empty:
-        ordered_features = stats['genofeature'].tolist()
-        feature_palette = {
-            feat: color_map.get(feat, color_map_lower.get(str(feat).lower(), '#808080'))
-            for feat in ordered_features
-        }
-        sns.boxplot(
-            data=plot_df,
-            x='ORF_length',
-            y='genofeature',
-            order=ordered_features,
-            hue='genofeature',
-            palette=feature_palette,
-            orient='h',
-            dodge=False
-        )
-        legend = plt.gca().get_legend()
-        if legend is not None:
-            legend.remove()
-    
-    # Add annotations
-        for i, row in stats.iterrows():
-            # Count annotation (left)
-            plt.annotate(f"N={int(row['count'])}",
-                xy=(row['min_length'], i),
-                xytext=(-10, 0),
-                textcoords='offset points',
-                ha='right', va='center',
-                fontsize=9, color='blue')
-            
-            # Mean annotation (right)
-            plt.annotate(f"Mean={row['mean_length']:.1f}",
-                xy=(row['max_length'], i),
-                xytext=(10, 0),
-                textcoords='offset points',
-                ha='left', va='center',
-                fontsize=9, color='green')
-    else:
-        plt.text(
-            0.5,
-            0.5,
-            'No valid ORF lengths available for plotting',
-            ha='center',
+# Flatten column names
+stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_length']
+stats = stats.sort_values('genofeature')
+
+# Save statistics
+stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
+
+# Create a violin plot with the same overall treatment used by PASV_POST.
+fig, ax_plot = plt.subplots(
+    1, 1,
+    figsize=(14, max(6, len(stats) * 0.55))
+)
+
+if not plot_df.empty:
+    ordered_features = stats['genofeature'].tolist()
+    feature_palette = {
+        feat: color_map.get(feat, color_map_lower.get(str(feat).lower(), '#808080'))
+        for feat in ordered_features
+    }
+    sns.violinplot(
+        data=plot_df,
+        x='ORF_length',
+        y='genofeature',
+        order=ordered_features,
+        hue='genofeature',
+        palette=feature_palette,
+        orient='h',
+        dodge=False,
+        inner='quartile',
+        cut=0,
+        linewidth=1,
+        ax=ax_plot
+    )
+    legend = ax_plot.get_legend()
+    if legend is not None:
+        legend.remove()
+
+    # Add a single boxed count/mean label per genofeature to mirror PASV_POST.
+    for idx, (_, row) in enumerate(stats.iterrows()):
+        count = int(row['count'])
+        mean = row['mean_length']
+        ax_plot.text(
+            1.01,
+            idx,
+            f"N={count}\\nμ={mean:.1f}",
+            transform=ax_plot.get_yaxis_transform(),
+            ha='left',
             va='center',
-            transform=plt.gca().transAxes
+            fontsize=10,
+            fontweight='bold',
+            clip_on=False,
+            bbox=dict(boxstyle='round,pad=0.35', facecolor='white', edgecolor='0.45', alpha=0.95)
         )
-    
-    plt.title("Length Distribution by genofeature")
-    plt.xlabel("ORF Length (aa)")
-    plt.grid(True, axis='x', linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig("length_distribution.png", bbox_inches='tight', dpi=300)
-    plt.close()
+else:
+    ax_plot.text(
+        0.5,
+        0.5,
+        'No valid ORF lengths available for plotting',
+        ha='center',
+        va='center',
+        transform=ax_plot.transAxes
+    )
+
+ax_plot.set_title("Length Distribution by genofeature")
+ax_plot.set_xlabel("ORF Length (aa)")
+ax_plot.set_ylabel("genofeature")
+ax_plot.grid(True, axis='x', linestyle='--', alpha=0.7)
+ax_plot.tick_params(axis='y', labelsize=10, pad=28)
+
+fig.tight_layout()
+fig.savefig("length_distribution.png", bbox_inches='tight', dpi=300)
+plt.close()
     """
 }
+
 
 
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
+    cache false
     publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
         mode: 'copy',
         pattern: "*.{tsv,png}"
@@ -393,171 +396,178 @@ process PASV_POST {
 
     script:
     """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    from Bio import SeqIO
-    import math
-    import sys
-    import os
-    import re
+#!/usr/bin/env python3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from Bio import SeqIO
+import math
+import sys
+import os
+import re
 
-    def load_sequence_lengths(fasta_path):
-        lengths = {}
-        try:
-            for record in SeqIO.parse(fasta_path, 'fasta'):
-                lengths[record.id] = len(record.seq)
-        except Exception as e:
-            print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}", file=sys.stderr)
-        return lengths
-
-    def load_genofeature_colors(metadata_path):
-        if not metadata_path or not os.path.exists(metadata_path):
-            print(f"WARNING: metadata file not found for colors: {metadata_path}", file=sys.stderr)
-            return {}, {}
-        try:
-            meta = pd.read_csv(metadata_path, sep='\t', dtype=str).fillna('')
-            if 'genofeature' not in meta.columns or 'color' not in meta.columns:
-                print("WARNING: metadata missing 'genofeature' or 'color' columns", file=sys.stderr)
-                return {}, {}
-            color_map = dict(zip(meta['genofeature'], meta['color']))
-            color_map_lower = {k.lower(): v for k, v in color_map.items()}
-            return color_map, color_map_lower
-        except Exception as e:
-            print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}", file=sys.stderr)
-            return {}, {}
-
-    raw_expected = '${meta.expected_sigs}'
-    tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
-    expected_sigs = set(t.upper() for t in tokens if t)
+def load_sequence_lengths(fasta_path):
+    lengths = {}
     try:
-        threshold = float(${params.pasv_threshold})
-    except Exception:
-        threshold = 0.01
+        for record in SeqIO.parse(fasta_path, 'fasta'):
+            lengths[record.id] = len(record.seq)
+    except Exception as e:
+        print(f"WARNING: unable to parse FASTA for ORF lengths ({fasta_path}): {e}", file=sys.stderr)
+    return lengths
 
-    # Read and process the PASV file
-    print(f"Processing PASV file for ${meta.protein}")
-    df = pd.read_csv("${pasv_file}", sep='\\t')
-    print(f"Initial data shape: {df.shape}")
+def load_genofeature_colors(metadata_path):
+    if not metadata_path or not os.path.exists(metadata_path):
+        print(f"WARNING: metadata file not found for colors: {metadata_path}", file=sys.stderr)
+        return {}, {}
+    try:
+        meta = pd.read_csv(metadata_path, sep='\\t', dtype=str).fillna('')
+        if 'genofeature' not in meta.columns or 'color' not in meta.columns:
+            print("WARNING: metadata missing 'genofeature' or 'color' columns", file=sys.stderr)
+            return {}, {}
+        color_map = dict(zip(meta['genofeature'], meta['color']))
+        color_map_lower = {k.lower(): v for k, v in color_map.items()}
+        return color_map, color_map_lower
+    except Exception as e:
+        print(f"WARNING: unable to load metadata colors from {metadata_path}: {e}", file=sys.stderr)
+        return {}, {}
 
-    # Remove signatures with gaps
-    processed_df = df[~df['signature'].str.contains('-')].copy()
-    print(f"After removing gaps: {processed_df.shape}")
+raw_expected = '${meta.expected_sigs}'
+tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
+expected_sigs = set(t.upper() for t in tokens if t)
+try:
+    threshold = float(${params.pasv_threshold})
+except Exception:
+    threshold = 0.01
 
-    # Derive ORF lengths from actual amino-acid sequences, not ORF header naming.
-    seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
-    processed_df['orf_length'] = processed_df['name'].map(seq_lengths)
-    processed_df = processed_df.dropna(subset=['orf_length']).copy()
-    color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
+# Read and process the PASV file
+print(f"Processing PASV file for ${meta.protein}")
+df = pd.read_csv("${pasv_file}", sep='\\t')
+print(f"Initial data shape: {df.shape}")
 
-    # Create span classes based on spans_start and spans_end columns
-    processed_df['span_class'] = processed_df.apply(
-        lambda row: 'both' if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
-                   else 'start' if row['spans_start'] == 'Yes'
-                   else 'end' if row['spans_end'] == 'Yes'
-                   else 'neither',
-        axis=1
-    )
+# Remove signatures with gaps
+processed_df = df[~df['signature'].str.contains('-')].copy()
+print(f"After removing gaps: {processed_df.shape}")
 
-    total_features = len(processed_df)
-    min_count = max(1, math.ceil(total_features * threshold))
-    print(f"Total features: {total_features}, min_count threshold: {min_count}", file=sys.stderr)
+# Derive ORF lengths from actual amino-acid sequences, not ORF header naming.
+seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+processed_df['orf_length'] = processed_df['name'].map(seq_lengths)
+processed_df = processed_df.dropna(subset=['orf_length']).copy()
+color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
 
-    sig_counts = processed_df['signature'].value_counts().to_dict()
-    keep_sigs = set([s for s,c in sig_counts.items() if c >= min_count])
-    keep_sigs |= set(expected_sigs)
-    dropped = sorted([s for s in sig_counts.keys() if s not in keep_sigs])
-    processed_df = processed_df[processed_df['signature'].isin(keep_sigs)].copy()
+# Create span classes based on spans_start and spans_end columns
+processed_df['span_class'] = processed_df.apply(
+    lambda row: 'both' if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
+               else 'start' if row['spans_start'] == 'Yes'
+               else 'end' if row['spans_end'] == 'Yes'
+               else 'neither',
+    axis=1
+)
 
-    # Generate statistics
-    stats = processed_df.groupby(['signature', 'span_class']).agg({
-        'orf_length': ['count', 'mean', 'std', 'min', 'max']
-    }).reset_index()
-    stats.columns = ['signature', 'span_class', 'count', 'mean_length', 'std_length', 'min_length', 'max_length']
-    
-    # Sort signatures by count for better visualization
-    signature_order = stats.groupby('signature')['count'].sum().sort_values(ascending=True).index
+total_features = len(processed_df)
+min_count = max(1, math.ceil(total_features * threshold))
+print(f"Total features: {total_features}, min_count threshold: {min_count}", file=sys.stderr)
 
-    # Create visualization
-    span_classes = sorted(processed_df['span_class'].unique())
-    n_signatures = len(signature_order)
-    
-    # Set figure dimensions
-    height_per_sig = 0.4
-    fig_height = max(8, n_signatures * height_per_sig)
-    fig_width = len(span_classes) * 12
-    
-    # Create figure
-    fig, axes = plt.subplots(1, len(span_classes), 
-                            figsize=(fig_width, fig_height),
-                            sharey=True)
-    
-    if len(span_classes) == 1:
-        axes = [axes]
-    
-    print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
-    
-    # Plot for each span class
-    for i, span in enumerate(span_classes):
-        ax = axes[i]
-        span_data = processed_df[processed_df['span_class'] == span]
-        
-        if not span_data.empty:
-            signature_palette = {
-                sig: color_map.get(sig, color_map_lower.get(str(sig).lower(), '#808080'))
-                for sig in signature_order
-            }
-            # Create boxplot
-            sns.boxplot(data=span_data,
-                       x='orf_length',
-                       y='signature',
-                       order=signature_order,
-                       hue='signature',
-                       palette=signature_palette,
-                       orient='h',
-                       ax=ax,
-                       dodge=False)
+sig_counts = processed_df['signature'].value_counts().to_dict()
+keep_sigs = set([s for s,c in sig_counts.items() if c >= min_count])
+keep_sigs |= set(expected_sigs)
+dropped = sorted([s for s in sig_counts.keys() if s not in keep_sigs])
+processed_df = processed_df[processed_df['signature'].isin(keep_sigs)].copy()
 
-            legend = ax.get_legend()
-            if legend is not None:
-                legend.remove()
+# Generate statistics
+stats = processed_df.groupby(['signature', 'span_class']).agg({
+    'orf_length': ['count', 'mean', 'std', 'min', 'max']
+}).reset_index()
+stats.columns = ['signature', 'span_class', 'count', 'mean_length', 'std_length', 'min_length', 'max_length']
 
-            # Add statistics
-            span_stats = stats[stats['span_class'] == span]
-            for idx, sig in enumerate(signature_order):
-                sig_stats = span_stats[span_stats['signature'] == sig]
-                if not sig_stats.empty:
-                    # Add count
-                    ax.text(ax.get_xlim()[0], idx, 
-                           f"n={int(sig_stats['count'].iloc[0])}",
-                           ha='right', va='center',
-                           fontsize=8, color='blue')
-                    
-                    # Add mean
-                    if sig_stats['count'].iloc[0] > 0:
-                        ax.text(ax.get_xlim()[1], idx,
-                               f"μ={sig_stats['mean_length'].iloc[0]:.1f}",
-                               ha='left', va='center',
-                               fontsize=8, color='green')
-        
-        ax.set_title(f"Span: {span}")
-        ax.set_xlabel("ORF Length (aa)")
-        ax.grid(True, alpha=0.3)
-        
-        # Ensure y-labels are readable
-        ax.tick_params(axis='y', labelsize=8, pad=40)
-    
-    # Adjust layout
-    plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
-    fig.suptitle(f"${meta.protein} Signature Distribution", fontsize=16, y=1.02)
-    
-    # Save outputs
-    processed_df.to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
-    stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
-    plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
-    plt.close()
-    """
+# Sort signatures by count for better visualization
+signature_order = stats.groupby('signature')['count'].sum().sort_values(ascending=True).index
+
+# Create visualization
+span_classes = sorted(processed_df['span_class'].unique())
+n_signatures = len(signature_order)
+
+# Set figure dimensions
+height_per_sig = 0.4
+fig_height = max(8, n_signatures * height_per_sig)
+fig_width = len(span_classes) * 12
+
+# Create figure
+fig, axes = plt.subplots(1, len(span_classes),
+                        figsize=(fig_width, fig_height),
+                        sharey=True)
+
+if len(span_classes) == 1:
+    axes = [axes]
+
+print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
+
+
+
+# Plot for each span class
+for i, span in enumerate(span_classes):
+    ax = axes[i]
+    span_data = processed_df[processed_df['span_class'] == span]
+
+    if not span_data.empty:
+        signature_palette = {
+            sig: color_map.get(sig, color_map_lower.get(str(sig).lower(), '#808080'))
+            for sig in signature_order
+        }
+        # Create violinplot
+        sns.violinplot(data=span_data,
+                   x='orf_length',
+                   y='signature',
+                   order=signature_order,
+                   hue='signature',
+                   palette=signature_palette,
+                   orient='h',
+                   dodge=False,
+                   inner='quartile',
+                   linewidth=1,
+                   cut=0,
+                   ax=ax)
+
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
+        # Add a single boxed count/mean label per genofeature.
+        span_stats = stats[stats['span_class'] == span]
+        for idx, sig in enumerate(signature_order):
+            sig_stats = span_stats[span_stats['signature'] == sig]
+            if not sig_stats.empty:
+                count = int(sig_stats['count'].iloc[0])
+                mean = sig_stats['mean_length'].iloc[0]
+                ax.text(
+                    1.01,
+                    idx,
+                    f"N={count}\\nμ={mean:.1f}",
+                    transform=ax.get_yaxis_transform(),
+                    ha='left',
+                    va='center',
+                    fontsize=10,
+                    fontweight='bold',
+                    clip_on=False,
+                    bbox=dict(boxstyle='round,pad=0.35', facecolor='white', edgecolor='0.45', alpha=0.95)
+                )
+
+    ax.set_title(f"Span: {span}")
+    ax.set_xlabel("ORF Length (aa)")
+    ax.grid(True, alpha=0.3)
+
+    # Ensure y-labels are readable
+    ax.tick_params(axis='y', labelsize=10, pad=40)
+
+# Adjust layout
+plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
+fig.suptitle(f"${meta.protein} Signature Distribution", fontsize=16, y=1.02)
+
+# Save outputs
+processed_df.to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
+stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
+plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
+plt.close()
+"""
 }
 
 

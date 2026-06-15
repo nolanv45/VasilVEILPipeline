@@ -40,7 +40,7 @@ workflow {
         SECOND_RUN(firstRes.ch_combined_tsv)
     }
     else {
-        SECOND_RUN("${params.outdir}/combined_datasets.tsv")
+        SECOND_RUN(Channel.fromPath("${params.outdir}/combined_datasets.tsv"))
     }
   }
   if (params.final_analysis) {
@@ -69,21 +69,31 @@ workflow FIRST_RUN {
                     cleaned_fasta: fasta
                 ]
                 // stage the subject DB file so Nextflow copies it into the task workdir
-                tuple(new_meta, fasta, file(protein_config.subjectDB))
+                tuple(new_meta, fasta, file(protein_config.subjectDB), file(protein_config.pfamDomain))
             }
 
         PHIDRA(ch_dataset_proteins)
 
         ch_branched = PHIDRA.out.results
-            .branch { meta, fasta, pfam, init, recurs -> 
+            .branch { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
                 annotation: meta.protein.toLowerCase() in (params.tophit_proteins.collect { it.toLowerCase() })
                 pasv: meta.protein.toLowerCase() in (params.pasv_proteins.collect { it.toLowerCase() })
                 pfam: meta.protein.toLowerCase() in (params.domain_proteins.collect { it.toLowerCase() })
                 phidra_only: true
             }
 
+    // output:
+    //     tuple val(meta), 
+    //           path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
+    //           path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
+    //           path("*/final_results/unvalidated_ida_pfams/full_proteins.fa"), 
+    //           path("*/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv"),
+    //           path("*/mmseqs/initial/hits.tsv"),
+    //           path("*/mmseqs/recursive/hits.tsv"),
+    //           emit: results
+
         ch_pasv = ch_branched.pasv
-            .map { meta, fasta, pfam, init, recurs ->
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
                 def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
                 def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
                 def roi_start   = settings.roi_start   ?: ''
@@ -98,13 +108,14 @@ workflow FIRST_RUN {
                     cat_sites: cat_sites,
                     expected_sigs: expected_sigs
                 ]
-                tuple(new_meta, fasta, meta.pasv_align_refs)
+                tuple(new_meta, val_fasta, unval_fasta, meta.pasv_align_refs)
             }
 
-        ANNOTATE_HITS(ch_branched.annotation.map { meta, fasta, pfam, init, recurs -> 
-            tuple(meta, fasta, init, recurs)
+        ANNOTATE_HITS(ch_branched.annotation.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            tuple(meta, val_fasta, init, recurs)
         }
         )
+
         PASV(ch_pasv)
 
         ch_pasv_post_input = PASV.out.results
@@ -114,19 +125,24 @@ workflow FIRST_RUN {
             }
 
         PASV_POST(ch_pasv_post_input)
-        PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only)
+        PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+                tuple(meta, val_fasta)
+            }
+        )
         DOMAIN_MATCH(ch_branched.pfam
-            .map { meta, fasta, pfam, init, recurs -> 
-                tuple(meta, fasta, pfam, params.pfam_annotation_map)
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+                tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
             }
         )
 
         ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
         ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
+        ch_domain_annotate_map = DOMAIN_MATCH.out.results ?: Channel.empty()
         
         // Combine channels
         ch_phidra_results = ch_annotate
-            .mix(ch_phidra_only)
+            .mix(ch_phidra_only, ch_domain_annotate_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)  // Add grouping key
             }
@@ -150,16 +166,11 @@ workflow FIRST_RUN {
                 tuple(meta, processed_file)
             }
 
-        ch_domain_annotate_map = DOMAIN_MATCH.out.results
-            .map { meta, processed_file ->
-                tuple(meta, processed_file)
-            }
-
         ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
         ch_pasv_map = ch_pasv_map ?: Channel.empty()
 
         ch_files_to_standardize = ch_combined_phidra
-            .mix(ch_pasv_map, ch_domain_annotate_map)
+            .mix(ch_pasv_map)
             .map { meta, file -> 
                 tuple(meta.id, meta, file)
             }
@@ -204,14 +215,43 @@ workflow SECOND_RUN {
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-    ch_embedding_datasets = Channel.value(params.embedding_datasets)
+    ch_embedding_targets_from_tsv = ch_combined_tsv
+        .splitCsv(header: true, sep: '\t')
+        .map { row ->
+            def dataset_id = row.dataset?.toString()?.trim()
+            def protein_name = row.protein?.toString()?.trim()
+            if (!dataset_id || !protein_name) {
+                throw new IllegalStateException("combined_datasets.tsv must contain non-empty 'dataset' and 'protein' columns for embeddings")
+            }
+            tuple(dataset_id, protein_name)
+        }
+        .unique()
+
+    ch_embedding_targets_from_fs = Channel
+        .fromPath("${params.outdir}/*/files_for_embeddings/*", type: 'dir')
+        .map { protein_dir ->
+            def protein_name = protein_dir.getName()
+            def dataset_id = protein_dir.getParent().getParent().getName()
+            tuple(dataset_id, protein_name)
+        }
+        .unique()
+
+    ch_embedding_targets = ch_embedding_targets_from_tsv
+        .mix(ch_embedding_targets_from_fs)
+        .unique()
+        .map { dataset_id, protein_name ->
+            def protein_dir = file("${params.outdir}/${dataset_id}/files_for_embeddings/${protein_name}")
+            def meta = [id: dataset_id, protein: protein_name]
+            tuple(meta, protein_dir)
+        }
 
     ch_embeddings = EMBEDDINGS(
-        ch_combined_tsv, "${baseDir}/tools/"
+        ch_embedding_targets,
+        "${baseDir}/tools/"
     )
 
     ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings
+        ch_embeddings.collect()
     )
 
     ch_umap = UMAP_PROJECTION(
