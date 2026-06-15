@@ -379,6 +379,7 @@ plt.close()
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
+    cache false
     publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
         mode: 'copy',
         pattern: "*.{tsv,png}"
@@ -500,6 +501,8 @@ if len(span_classes) == 1:
 
 print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
 
+
+
 # Plot for each span class
 for i, span in enumerate(span_classes):
     ax = axes[i]
@@ -510,16 +513,19 @@ for i, span in enumerate(span_classes):
             sig: color_map.get(sig, color_map_lower.get(str(sig).lower(), '#808080'))
             for sig in signature_order
         }
-        # Create boxplot
-        sns.boxplot(data=span_data,
+        # Create violinplot
+        sns.violinplot(data=span_data,
                    x='orf_length',
                    y='signature',
                    order=signature_order,
                    hue='signature',
                    palette=signature_palette,
                    orient='h',
-                   ax=ax,
-                   dodge=False)
+                   dodge=False,
+                   inner='quartile',
+                   linewidth=1,
+                   cut=0,
+                   ax=ax)
 
         legend = ax.get_legend()
         if legend is not None:
