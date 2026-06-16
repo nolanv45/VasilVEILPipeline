@@ -265,8 +265,7 @@ process PASV {
     mkdir -p pasv_output/{input,output,pasv}
 
     # Prepare input files
-    # cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
-    cp "${val_fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
+    cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
     # Setup PASV
