@@ -13,7 +13,8 @@ ANALYZE_AND_PLOT;
 STANDARDIZE_OUTPUTS;
 COMBINE_DATASETS;
 DUPLICATE_HANDLE;
-SPLIT_BY_GENOFEATURE;} from './first.nf'
+SPLIT_BY_GENOFEATURE;
+CRITERIA_TSV} from './first.nf'
 
 include {MODULE_FILE; GENERATE_COORDINATES_2; GENOFEATURE_CENTRIC; MODIFY_CLUSTERS; ZEROFIVEC; HDBSCAN_TSV; HDBSCAN_VISUALS} from './third.nf'
 
@@ -82,16 +83,6 @@ workflow FIRST_RUN {
                 phidra_only: true
             }
 
-    // output:
-    //     tuple val(meta), 
-    //           path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
-    //           path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
-    //           path("*/final_results/unvalidated_ida_pfams/full_proteins.fa"), 
-    //           path("*/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv"),
-    //           path("*/mmseqs/initial/hits.tsv"),
-    //           path("*/mmseqs/recursive/hits.tsv"),
-    //           emit: results
-
         ch_pasv = ch_branched.pasv
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
                 def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
@@ -111,6 +102,7 @@ workflow FIRST_RUN {
                 tuple(new_meta, val_fasta, unval_fasta, meta.pasv_align_refs)
             }
 
+
         ANNOTATE_HITS(ch_branched.annotation.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
             tuple(meta, val_fasta, init, recurs)
         }
@@ -125,16 +117,47 @@ workflow FIRST_RUN {
             }
 
         PASV_POST(ch_pasv_post_input)
+
+
+        // ----------------------------------------------------------------------
+        // FIXED CHANNELS: Placed downstream of their process dependencies
+        // ----------------------------------------------------------------------
+        // Extract the unvalidated reports
+        ch_phidra_crit = PHIDRA.out.results
+
+        ch_unval_crit = ch_phidra_crit.map { items -> [items[0].id, items[4]] }
+        .view { x -> "UNVAL: $x" }
+        ch_val_crit   = ch_phidra_crit.map { items -> [items[0].id, items[2]] }
+        .view { x -> "VAL: $x" }
+
+        // Extract the PASV processed reports (using index 1 from its output tuple)
+        ch_pasv_crit  = PASV_POST.out.results.map { items -> [ items[0].id, items[1] ] }
+        .view { x -> "PASV: $x" }
+
+        ch_criteria_input = ch_unval_crit
+            .mix(ch_val_crit, ch_pasv_crit)
+            .view { x -> "MIXED: $x" }
+            .groupTuple(by: 0)
+            .view { x -> "GROUPED: $x" }
+            .map { id, files ->
+                // Return a clean metadata map and a flat list of paths
+                return [ [id: id], files.flatten() ]
+            }
+            .view { x -> "FINAL INPUT: $x" }
+
+        CRITERIA_TSV(ch_criteria_input)
+
+        // ----------------------------------------------------------------------
+
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
                 tuple(meta, val_fasta)
-            }
-        )
+            })
+
         DOMAIN_MATCH(ch_branched.pfam
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
                 tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
-            }
-        )
+            })
 
         ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
         ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
@@ -143,37 +166,28 @@ workflow FIRST_RUN {
         // Combine channels
         ch_phidra_results = ch_annotate
             .mix(ch_phidra_only, ch_domain_annotate_map)
-            .map { meta, file -> 
-                tuple(meta.id, meta, file)  // Add grouping key
-            }
+            .map { meta, file -> tuple(meta.id, meta, file) } //add grouping key
             .groupTuple(by: 0)  // Group by dataset ID
-            .map { id, metas, files ->
-                tuple(metas[0], files.flatten())  // Flatten the files array
-            }
+            .map { id, metas, files -> tuple(metas[0], files.flatten()) } // Flatten the files array
+            
 
         COMBINE_PHIDRA_TSV(ch_phidra_results)
 
         ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
             .combine(ch_metadata)
-            .map { meta, combined_file, metadata_file ->
-                tuple(meta, combined_file, metadata_file)
-            }
+            .map { meta, combined_file, metadata_file -> tuple(meta, combined_file, metadata_file) }
 
         ANALYZE_AND_PLOT(ch_analyze_input)
 
         ch_pasv_map = PASV_POST.out
-            .map { meta, processed_file, stats_file, plot_file ->
-                tuple(meta, processed_file)
-            }
+            .map { meta, processed_file, stats_file, plot_file -> tuple(meta, processed_file) }
 
         ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
         ch_pasv_map = ch_pasv_map ?: Channel.empty()
 
         ch_files_to_standardize = ch_combined_phidra
             .mix(ch_pasv_map)
-            .map { meta, file -> 
-                tuple(meta.id, meta, file)
-            }
+            .map { meta, file -> tuple(meta.id, meta, file) }
             .groupTuple(by: 0)
             .map { id, metas, files ->
                 def meta0 = metas[0]
@@ -184,9 +198,7 @@ workflow FIRST_RUN {
         STANDARDIZE_OUTPUTS(ch_files_to_standardize)
 
         ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
-            .map { meta, file ->
-                file.toAbsolutePath()
-            }
+            .map { meta, file -> file.toAbsolutePath() }
             .collect()
         
         COMBINE_DATASETS(ch_combine_datasets)
@@ -196,13 +208,12 @@ workflow FIRST_RUN {
         ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
             STANDARDIZE_OUTPUTS.out
         )
-
         // Barrier token: count() emits only after split channel is fully complete
         ch_split_ready = ch_split_by_genofeature.count()
         ch_combined_tsv = COMBINE_DATASETS.out.combined
             .combine(ch_split_ready)
             .map { combined_tsv, split_count -> combined_tsv }
-
+  
     emit:
         ch_combined_tsv
 }
