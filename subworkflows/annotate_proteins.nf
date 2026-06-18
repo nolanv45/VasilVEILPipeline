@@ -1105,3 +1105,179 @@ process COMBINE_DATASETS {
         pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
     """
 }
+
+
+
+
+
+workflow ANNOTATE_PROTEINS {
+    take:
+        ch_dataset
+
+    main:
+        ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+        CLEAN_FASTA_HEADERS(ch_dataset)
+         
+        ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
+            .combine(Channel.fromList(params.proteins))
+            .map { meta, fasta, protein_config -> 
+                def new_meta = meta + [
+                    protein: protein_config.protein,
+                    pfamDomain: protein_config.pfamDomain,
+                    subjectDB: protein_config.subjectDB,
+                    pasv_align_refs: protein_config.containsKey('pasv_align_refs') ? 
+                        protein_config.pasv_align_refs : null,
+                    cleaned_fasta: fasta
+                ]
+                // stage the subject DB file so Nextflow copies it into the task workdir
+                tuple(new_meta, fasta, file(protein_config.subjectDB), file(protein_config.pfamDomain))
+            }
+
+        PHIDRA(ch_dataset_proteins)
+
+        ch_branched = PHIDRA.out.results
+            .branch { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+                annotation: meta.protein.toLowerCase() in (params.tophit_proteins.collect { it.toLowerCase() })
+                pasv: meta.protein.toLowerCase() in (params.pasv_proteins.collect { it.toLowerCase() })
+                pfam: meta.protein.toLowerCase() in (params.domain_proteins.collect { it.toLowerCase() })
+                phidra_only: true
+            }
+
+        ch_pasv = ch_branched.pasv
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
+                def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
+                def roi_start   = settings.roi_start   ?: ''
+                def roi_end     = settings.roi_end     ?: ''
+                def cat_sites   = settings.cat_sites   ?: ''
+                def expected_sigs  = settings.expected_sigs   ?: ''
+    
+                def new_meta = meta + [
+                    mapped_name: mapped_name,
+                    roi_start: roi_start,
+                    roi_end: roi_end,
+                    cat_sites: cat_sites,
+                    expected_sigs: expected_sigs
+                ]
+                tuple(new_meta, val_fasta, unval_fasta, meta.pasv_align_refs)
+            }
+
+
+        ANNOTATE_HITS(ch_branched.annotation.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            tuple(meta, val_fasta, init, recurs)
+        }
+        )
+
+        PASV(ch_pasv)
+
+        ch_pasv_post_input = PASV.out.results
+            .combine(ch_metadata)
+            .map { meta, pasv_file, metadata_file ->
+                tuple(meta, pasv_file, metadata_file)
+            }
+
+        PASV_POST(ch_pasv_post_input)
+
+
+        // ----------------------------------------------------------------------
+        // FIXED CHANNELS: Placed downstream of their process dependencies
+        // ----------------------------------------------------------------------
+        // Extract the unvalidated reports
+        ch_phidra_crit = PHIDRA.out.results
+
+        ch_unval_crit = ch_phidra_crit.map { items -> [items[0].id, items[4]] }
+        .view { x -> "UNVAL: $x" }
+        ch_val_crit   = ch_phidra_crit.map { items -> [items[0].id, items[2]] }
+        .view { x -> "VAL: $x" }
+
+        // Extract the PASV processed reports (using index 1 from its output tuple)
+        ch_pasv_crit  = PASV_POST.out.results.map { items -> [ items[0].id, items[1] ] }
+        .view { x -> "PASV: $x" }
+
+        ch_criteria_input = ch_unval_crit
+            .mix(ch_val_crit, ch_pasv_crit)
+            .view { x -> "MIXED: $x" }
+            .groupTuple(by: 0)
+            .view { x -> "GROUPED: $x" }
+            .map { id, files ->
+                // Return a clean metadata map and a flat list of paths
+                return [ [id: id], files.flatten() ]
+            }
+            .view { x -> "FINAL INPUT: $x" }
+
+        CRITERIA_TSV(ch_criteria_input)
+
+        // ----------------------------------------------------------------------
+
+        PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+                tuple(meta, val_fasta)
+            })
+
+        DOMAIN_MATCH(ch_branched.pfam
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+                tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
+            })
+
+        ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
+        ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
+        ch_domain_annotate_map = DOMAIN_MATCH.out.results ?: Channel.empty()
+        
+        // Combine channels
+        ch_phidra_results = ch_annotate
+            .mix(ch_phidra_only, ch_domain_annotate_map)
+            .map { meta, file -> tuple(meta.id, meta, file) } //add grouping key
+            .groupTuple(by: 0)  // Group by dataset ID
+            .map { id, metas, files -> tuple(metas[0], files.flatten()) } // Flatten the files array
+            
+
+        COMBINE_PHIDRA_TSV(ch_phidra_results)
+
+        ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
+            .combine(ch_metadata)
+            .map { meta, combined_file, metadata_file -> tuple(meta, combined_file, metadata_file) }
+
+        ANALYZE_AND_PLOT(ch_analyze_input)
+
+        ch_pasv_map = PASV_POST.out
+            .map { meta, processed_file, stats_file, plot_file -> tuple(meta, processed_file) }
+
+        ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
+        ch_pasv_map = ch_pasv_map ?: Channel.empty()
+
+        ch_files_to_standardize = ch_combined_phidra
+            .mix(ch_pasv_map)
+            .map { meta, file -> tuple(meta.id, meta, file) }
+            .groupTuple(by: 0)
+            .map { id, metas, files ->
+                def meta0 = metas[0]
+                def files_list = files.flatten().collect { it.toString() }
+                tuple(meta0, files_list)
+            }
+
+        STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+
+        ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
+            .map { meta, file -> file.toAbsolutePath() }
+            .collect()
+        
+        COMBINE_DATASETS(ch_combine_datasets)
+
+        DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
+
+        ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+            STANDARDIZE_OUTPUTS.out
+        )
+        // Barrier token: count() emits only after split channel is fully complete
+        ch_split_ready = ch_split_by_genofeature.count()
+        ch_combined_tsv = COMBINE_DATASETS.out.combined
+            .combine(ch_split_ready)
+            .map { combined_tsv, split_count -> combined_tsv }
+  
+    emit:
+        ch_combined_tsv
+}
+
+
+

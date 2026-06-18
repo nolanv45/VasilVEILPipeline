@@ -899,3 +899,66 @@ PY
     """
 }
 
+
+workflow EMBEDDING_PARAMETER_DECISION {
+    take:
+        ch_combined_tsv
+        
+    main:
+    ch_filtered_tsv = ch_combined_tsv
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+    ch_embedding_targets_from_tsv = ch_combined_tsv
+        .splitCsv(header: true, sep: '\t')
+        .map { row ->
+            def dataset_id = row.dataset?.toString()?.trim()
+            def protein_name = row.protein?.toString()?.trim()
+            if (!dataset_id || !protein_name) {
+                throw new IllegalStateException("combined_datasets.tsv must contain non-empty 'dataset' and 'protein' columns for embeddings")
+            }
+            tuple(dataset_id, protein_name)
+        }
+        .unique()
+
+    ch_embedding_targets_from_fs = Channel
+        .fromPath("${params.outdir}/*/files_for_embeddings/*", type: 'dir')
+        .map { protein_dir ->
+            def protein_name = protein_dir.getName()
+            def dataset_id = protein_dir.getParent().getParent().getName()
+            tuple(dataset_id, protein_name)
+        }
+        .unique()
+
+    ch_embedding_targets = ch_embedding_targets_from_tsv
+        .mix(ch_embedding_targets_from_fs)
+        .unique()
+        .map { dataset_id, protein_name ->
+            def protein_dir = file("${params.outdir}/${dataset_id}/files_for_embeddings/${protein_name}")
+            def meta = [id: dataset_id, protein: protein_name]
+            tuple(meta, protein_dir)
+        }
+
+    ch_embeddings = EMBEDDINGS(
+        ch_embedding_targets,
+        "${baseDir}/tools/"
+    )
+
+    ch_coordinates = GENERATE_COORDINATES(
+        ch_embeddings.collect()
+    )
+
+    ch_umap = UMAP_PROJECTION(
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata
+    )
+
+    ch_hbd = HDBSCAN(
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata,
+        ch_umap.plots       
+    )
+    emit:
+        ch_combined_tsv
+}

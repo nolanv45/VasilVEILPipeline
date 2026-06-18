@@ -1172,3 +1172,27 @@ print(f"All plots completed!")
 }
 
 
+workflow REP_MODULE_ANALYSIS {
+    take:
+        ch_combined_tsv
+
+    main:
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+    ch_module_file = MODULE_FILE(
+        ch_combined_tsv,
+        ch_metadata
+    )
+
+    GENERATE_COORDINATES_2("${params.outdir}/embeddings")
+    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+    MODIFY_CLUSTERS("${params.outdir}/hdbscan/clusters_csv")
+    
+    HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
+    HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info, ch_metadata)
+    // ZEROFIVEC(GENERATE_COORDINATES_2.coordinates_tsv, MODIFY_CLUSTERS.out)
+
+    GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
+
+}
