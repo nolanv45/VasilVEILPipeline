@@ -58,6 +58,79 @@ process PHIDRA {
     """
 }
 
+process CRITERIA_TSV {
+    tag "${meta.id}"
+    container "containers/phidra/phidra.sif"
+    label 'standard'
+    publishDir "${params.outdir}/${meta.id}/phidra",
+        mode: 'copy'
+    
+    input:
+        // Changed path to val to allow safe passing of empty lists/placeholders
+        tuple val(meta), path(all_files, stageAs: "inputs/file_?/*")
+
+    output:
+        tuple val(meta), path("${meta.id}_phidra_combined_criteria.tsv")
+
+    script:
+    def file_list_str = all_files.collect { "\"${it}\"" }.join(", ")
+    """
+#!/usr/bin/env python3
+import pandas as pd
+import os
+
+file_list = [${file_list_str}]
+
+validated_files   = [f for f in file_list if "pfam_validated_merged_report"   in f]
+unvalidated_files = [f for f in file_list if "pfam_unvalidated_merged_report" in f]
+pasv_files        = [f for f in file_list if f.endswith("_processed.tsv")]
+
+all_phidra_dfs = []
+
+for f in validated_files:
+    if os.path.exists(f):
+        df = pd.read_csv(f, sep='\\t')
+        df['PHIDRA'] = "Yes"
+        all_phidra_dfs.append(df)
+
+for f in unvalidated_files:
+    if os.path.exists(f):
+        df = pd.read_csv(f, sep='\\t')
+        df['PHIDRA'] = "No"
+        all_phidra_dfs.append(df)
+
+if not all_phidra_dfs:
+    empty_df = pd.DataFrame(columns=[
+        'Query_ID','PHIDRA','PASV','PASV_Spans','PASV_Signature'
+    ])
+    empty_df.to_csv('${meta.id}_phidra_combined_criteria.tsv', sep='\\t', index=False)
+    exit(0)
+
+combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
+
+combined_df['PASV'] = "No"
+combined_df['PASV_Spans'] = ""
+combined_df['PASV_Signature'] = ""
+
+if pasv_files:
+    pasv_path = pasv_files[0]
+    if os.path.exists(pasv_path):
+        pasv_df = pd.read_csv(pasv_path, sep='\\t')
+
+        spans_map = dict(zip(pasv_df['name'], pasv_df['spans']))
+        sig_map = dict(zip(pasv_df['name'], pasv_df['signature']))
+
+        for idx, row in combined_df.iterrows():
+            q = row['Query_ID']
+            if q in spans_map:
+                combined_df.at[idx,'PASV'] = "Yes"
+                combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
+                combined_df.at[idx,'PASV_Signature'] = str(sig_map[q])
+
+combined_df.to_csv('${meta.id}_phidra_combined_criteria.tsv', sep='\\t', index=False)
+"""
+}
+
 process DOMAIN_MATCH {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
@@ -192,8 +265,7 @@ process PASV {
     mkdir -p pasv_output/{input,output,pasv}
 
     # Prepare input files
-    # cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
-    cp "${val_fasta}" "pasv_output/input/${meta.mapped_name}.fasta"
+    cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
     cp "${align_refs}" "pasv_output/input/align_refs.fa"
 
     # Setup PASV
