@@ -62,7 +62,7 @@ process CRITERIA_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/phidra",
+    publishDir "${params.outdir}/${meta.id}/03_protein_analysis",
         mode: 'copy'
     
     input:
@@ -70,7 +70,7 @@ process CRITERIA_TSV {
         tuple val(meta), path(all_files, stageAs: "inputs/file_?/*")
 
     output:
-        tuple val(meta), path("${meta.id}_phidra_combined_criteria.tsv")
+        tuple val(meta), path("${meta.id}_phidra_pasv_combined_criteria.tsv")
 
     script:
     def file_list_str = all_files.collect { "\"${it}\"" }.join(", ")
@@ -103,7 +103,7 @@ if not all_phidra_dfs:
     empty_df = pd.DataFrame(columns=[
         'Query_ID','PHIDRA','PASV','PASV_Spans','PASV_Signature'
     ])
-    empty_df.to_csv('${meta.id}_phidra_combined_criteria.tsv', sep='\\t', index=False)
+    empty_df.to_csv('${meta.id}_phidra_pasv_combined_criteria.tsv', sep='\\t', index=False)
     exit(0)
 
 combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
@@ -127,7 +127,7 @@ if pasv_files:
                 combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
                 combined_df.at[idx,'PASV_Signature'] = str(sig_map[q])
 
-combined_df.to_csv('${meta.id}_phidra_combined_criteria.tsv', sep='\\t', index=False)
+combined_df.to_csv('${meta.id}_phidra_pasv_combined_criteria.tsv', sep='\\t', index=False)
 """
 }
 
@@ -306,8 +306,8 @@ process ANALYZE_AND_PLOT {
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_protein_analysis/stats/${filename}"
-            else if (filename.endsWith('.png')) "03_protein_analysis/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_protein_analysis/phidra_annotation/stats/${filename}"
+            else if (filename.endsWith('.png')) "03_protein_analysis/phidra_annotation/plots/${filename}"
             else null
         }
 
@@ -452,10 +452,14 @@ plt.close()
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    cache false
-    publishDir "${params.outdir}/${meta.id}/pasv_analysis/${meta.protein}",
+    publishDir "${params.outdir}/${meta.id}",
         mode: 'copy',
-        pattern: "*.{tsv,png}"
+        pattern: "*.{tsv,png}",
+        saveAs: { filename ->
+            if (filename.endsWith('.tsv')) "03_protein_analysis/pasv_annotation/${meta.protein}/stats/${filename}"
+            else if (filename.endsWith('.png')) "03_protein_analysis/pasv_annotation/${meta.protein}/plots/${filename}"
+            else null
+        }
 
     input:
         tuple val(meta), path(pasv_file), path(metadata_file)
