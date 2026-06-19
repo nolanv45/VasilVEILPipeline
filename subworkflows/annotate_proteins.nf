@@ -20,7 +20,7 @@ process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/phidra",
+    publishDir "${params.outdir}/${meta.id}/01_phidra",
         mode: 'copy'
 
     input:
@@ -249,27 +249,28 @@ process PASV {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/pasv/${meta.protein}",
+    publishDir "${params.outdir}/${meta.id}/02_pasv/${meta.protein}",
         mode: 'copy',
-        pattern: "pasv_output/output/*.tsv"
+        pattern: "pasv/output/${meta.protein}_putative.pasv_signatures.tsv",
+        saveAs: { filename -> file(filename).name }
 
     input:
         tuple val(meta), path(val_fasta, stageAs: 'val_full.fa'), path(unval_fasta, stageAs: 'unval_full.fa'), path(align_refs)
 
     output:
-        tuple val(meta), path("pasv_output/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
+        tuple val(meta), path("pasv/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
 
     script:
     """
     
-    mkdir -p pasv_output/{input,output,pasv}
+    mkdir -p pasv/{input,output,pasv_tool}
 
     # Prepare input files
-    cat "${val_fasta}" "${unval_fasta}" > "pasv_output/input/${meta.mapped_name}.fasta"
-    cp "${align_refs}" "pasv_output/input/align_refs.fa"
+    cat "${val_fasta}" "${unval_fasta}" > "pasv/input/${meta.mapped_name}.fasta"
+    cp "${align_refs}" "pasv/input/align_refs.fa"
 
     # Setup PASV
-    PASV_DIR="pasv_output/pasv"
+    PASV_DIR="pasv/pasv_tool"
     if [ ! -f "\${PASV_DIR}/pasv" ]; then
         mkdir -p "\${PASV_DIR}"
         cd "\${PASV_DIR}"
@@ -281,14 +282,14 @@ process PASV {
 
     # Run PASV
     \${PASV_DIR}/pasv msa \\
-        --outdir=pasv_output/output \\
+        --outdir=pasv/output \\
         --force \\
         --roi-start=${meta.roi_start} \\
         --roi-end=${meta.roi_end} \\
         --jobs=${task.cpus} \\
         --aligner=mafft \\
-        pasv_output/input/${meta.mapped_name}.fasta \\
-        pasv_output/input/align_refs.fa \\
+        pasv/input/${meta.mapped_name}.fasta \\
+        pasv/input/align_refs.fa \\
         ${meta.cat_sites}
 
     cat <<-END_VERSIONS > versions.yml
@@ -305,8 +306,8 @@ process ANALYZE_AND_PLOT {
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "phidra_analysis/stats/${filename}"
-            else if (filename.endsWith('.png')) "phidra_analysis/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_protein_analysis/stats/${filename}"
+            else if (filename.endsWith('.png')) "03_protein_analysis/plots/${filename}"
             else null
         }
 
