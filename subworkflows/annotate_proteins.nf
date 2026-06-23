@@ -62,7 +62,7 @@ process CRITERIA_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_protein_analysis",
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
         mode: 'copy'
     
     input:
@@ -70,7 +70,7 @@ process CRITERIA_TSV {
         tuple val(meta), path(all_files, stageAs: "inputs/file_?/*")
 
     output:
-        tuple val(meta), path("${meta.id}_phidra_pasv_combined_criteria.tsv")
+        tuple val(meta), path("${meta.id}_annotation_criteria.tsv")
 
     script:
     def file_list_str = all_files.collect { "\"${it}\"" }.join(", ")
@@ -103,7 +103,7 @@ if not all_phidra_dfs:
     empty_df = pd.DataFrame(columns=[
         'Query_ID','PHIDRA','PASV','PASV_Spans','PASV_Signature'
     ])
-    empty_df.to_csv('${meta.id}_phidra_pasv_combined_criteria.tsv', sep='\\t', index=False)
+    empty_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
     exit(0)
 
 combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
@@ -127,7 +127,7 @@ if pasv_files:
                 combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
                 combined_df.at[idx,'PASV_Signature'] = str(sig_map[q])
 
-combined_df.to_csv('${meta.id}_phidra_pasv_combined_criteria.tsv', sep='\\t', index=False)
+combined_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
 """
 }
 
@@ -306,8 +306,8 @@ process ANALYZE_AND_PLOT {
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_protein_analysis/phidra_annotation/stats/${filename}"
-            else if (filename.endsWith('.png')) "03_protein_analysis/phidra_annotation/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_annotation_analysis/phidra_annotation/stats/${filename}"
+            else if (filename.endsWith('.png')) "03_annotation_analysis/phidra_annotation/plots/${filename}"
             else null
         }
 
@@ -456,8 +456,8 @@ process PASV_POST {
         mode: 'copy',
         pattern: "*.{tsv,png}",
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_protein_analysis/pasv_annotation/${meta.protein}/stats/${filename}"
-            else if (filename.endsWith('.png')) "03_protein_analysis/pasv_annotation/${meta.protein}/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_annotation_analysis/pasv_annotation/${meta.protein}/stats/${filename}"
+            else if (filename.endsWith('.png')) "03_annotation_analysis/pasv_annotation/${meta.protein}/plots/${filename}"
             else null
         }
 
@@ -740,7 +740,7 @@ process STANDARDIZE_OUTPUTS {
 
 process PHIDRA_ONLY_SUMMARY {
     tag "${meta.id}:${meta.protein}"
-    publishDir "${params.outdir}/${meta.id}/phidra/phidra_only/${meta.protein}", 
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/without_top_hit_annotation/${meta.protein}", 
         mode: 'copy',
         pattern: "*.tsv"
     container "containers/phidra/phidra.sif"
@@ -802,7 +802,7 @@ process PHIDRA_ONLY_SUMMARY {
 process ANNOTATE_HITS {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}/phidra/annotate_hits/${meta.protein}", 
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/top_hit_annotation/${meta.protein}", 
         mode: 'copy',
         pattern: "*_annotated_hits.tsv"
 
@@ -1016,14 +1016,14 @@ process COMBINE_PHIDRA_TSV {
 process SPLIT_BY_GENOFEATURE {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}",
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
         mode: 'copy'
 
     input:
         tuple val(meta), path(filtered_tsv)
 
     output:
-        tuple val(meta), path("files_for_embeddings"), emit: fastas_for_embeddings
+        tuple val(meta), path("protein_genofeature_fastas"), emit: fastas_for_embeddings
 
     script:
     """
@@ -1033,7 +1033,7 @@ process SPLIT_BY_GENOFEATURE {
     import os
 
     # Create the base output directory
-    os.makedirs("files_for_embeddings", exist_ok=True)
+    os.makedirs("protein_genofeature_fastas", exist_ok=True)
     df = pd.read_csv("${filtered_tsv}", sep='\\t')
     seq_dict = SeqIO.to_dict(SeqIO.parse("${meta.cleaned_fasta}", "fasta"))
 
@@ -1043,7 +1043,7 @@ process SPLIT_BY_GENOFEATURE {
         
         for genofeature in protein_df['genofeature'].unique():
             # Create nested directory structure
-            dir_path = os.path.join("files_for_embeddings", protein, genofeature)
+            dir_path = os.path.join("protein_genofeature_fastas", protein, genofeature)
             os.makedirs(dir_path, exist_ok=True)
             
             # Filter records for this genofeature

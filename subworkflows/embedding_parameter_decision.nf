@@ -921,7 +921,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
         .unique()
 
     ch_embedding_targets_from_fs = Channel
-        .fromPath("${params.outdir}/*/files_for_embeddings/*", type: 'dir')
+        .fromPath("${params.outdir}/03_annotation_analysis/*/protein_genofeature_fastas/*", type: 'dir')
         .map { protein_dir ->
             def protein_name = protein_dir.getName()
             def dataset_id = protein_dir.getParent().getParent().getName()
@@ -933,7 +933,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
         .mix(ch_embedding_targets_from_fs)
         .unique()
         .map { dataset_id, protein_name ->
-            def protein_dir = file("${params.outdir}/${dataset_id}/files_for_embeddings/${protein_name}")
+            def protein_dir = file("${params.outdir}/${dataset_id}/03_annotation_analysis/protein_genofeature_fastas/${protein_name}")
             def meta = [id: dataset_id, protein: protein_name]
             tuple(meta, protein_dir)
         }
