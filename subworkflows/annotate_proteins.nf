@@ -1168,22 +1168,12 @@ workflow ANNOTATE_PROTEINS {
 
 
 
-        // Addressed
-        PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only
-            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-                tuple(meta, val_fasta)
-            })
-
-
-
-
         DOMAIN_MATCH(ch_branched.pfam
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
                 tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
             })
 
         ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
-        ch_phidra_only = PHIDRA_ONLY_SUMMARY.out.results ?: Channel.empty()
         ch_domain_annotate_map = DOMAIN_MATCH.out.results ?: Channel.empty()
         
         // Combine channels
