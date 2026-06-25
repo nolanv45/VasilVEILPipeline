@@ -28,10 +28,10 @@ process PHIDRA {
 
     output:
         tuple val(meta), 
-              path("*/final_results/validated_ida_pfams/full_proteins.fa"), 
-              path("*/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv"),
-              path("*/final_results/unvalidated_ida_pfams/full_proteins.fa"), 
-              path("*/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv"),
+              path("${meta.protein}_validated_full_proteins.fa"), 
+              path("${meta.protein}_pfam_validated_report.tsv"),
+              path("${meta.protein}_unvalidated_full_proteins.fa"), 
+              path("${meta.protein}_pfam_unvalidated_report.tsv"),
               path("*/mmseqs/initial/hits.tsv"),
               path("*/mmseqs/recursive/hits.tsv"),
               emit: results
@@ -55,6 +55,16 @@ process PHIDRA {
         printf "Query_ID\tTarget_ID\tSequence_Identity\tAlignment_Length\tMismatches\tGap_Openings\tQuery_Start\tQuery_End\tTarget_Start\tTarget_End\tEvalue\tBit_Score\n" \
             > "\$WORK_DIR/${meta.protein}/mmseqs/recursive/hits.tsv"
     fi
+
+    cp ${meta.protein}/final_results/validated_ida_pfams/full_proteins.fa \
+    ${meta.protein}_validated_full_proteins.fa
+    cp ${meta.protein}/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv \
+    ${meta.protein}_pfam_validated_report.tsv
+    cp ${meta.protein}/final_results/unvalidated_ida_pfams/full_proteins.fa \
+    ${meta.protein}_unvalidated_full_proteins.fa
+    cp ${meta.protein}/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv \
+    ${meta.protein}_pfam_unvalidated_report.tsv
+
     """
 }
 
@@ -67,7 +77,7 @@ process CRITERIA_TSV {
     
     input:
         // Changed path to val to allow safe passing of empty lists/placeholders
-        tuple val(meta), path(all_files, stageAs: "inputs/file_?/*")
+        tuple val(meta), path(all_files)
 
     output:
         tuple val(meta), path("${meta.id}_annotation_criteria.tsv")
@@ -81,8 +91,8 @@ import os
 
 file_list = [${file_list_str}]
 
-validated_files   = [f for f in file_list if "pfam_validated_merged_report"   in f]
-unvalidated_files = [f for f in file_list if "pfam_unvalidated_merged_report" in f]
+validated_files   = [f for f in file_list if f.endswith("_pfam_validated_report.tsv")]
+unvalidated_files = [f for f in file_list if f.endswith("_pfam_unvalidated_report.tsv")]
 pasv_files        = [f for f in file_list if f.endswith("_processed.tsv")]
 
 all_phidra_dfs = []
@@ -91,26 +101,27 @@ for f in validated_files:
     if os.path.exists(f):
         df = pd.read_csv(f, sep='\\t')
         df['PHIDRA'] = "Yes"
+        df['PASV'] = "No"
+        df['PASV_Spans'] = ""
+        df['PASV_Signature'] = ""
+        df['Dataset'] = "${meta.id}"
+        df['Protein'] = os.path.basename(f).split("_", 1)[0]
+        df['Genofeature'] = ""
         all_phidra_dfs.append(df)
 
 for f in unvalidated_files:
     if os.path.exists(f):
         df = pd.read_csv(f, sep='\\t')
         df['PHIDRA'] = "No"
+        df['PASV'] = "No"
+        df['PASV_Spans'] = ""
+        df['PASV_Signature'] = ""
+        df['Dataset'] = "${meta.id}"
+        df['Protein'] = os.path.basename(f).split("_", 1)[0]
+        df['Genofeature'] = ""
         all_phidra_dfs.append(df)
 
-if not all_phidra_dfs:
-    empty_df = pd.DataFrame(columns=[
-        'Query_ID','PHIDRA','PASV','PASV_Spans','PASV_Signature'
-    ])
-    empty_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
-    exit(0)
-
 combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
-
-combined_df['PASV'] = "No"
-combined_df['PASV_Spans'] = ""
-combined_df['PASV_Signature'] = ""
 
 if pasv_files:
     pasv_path = pasv_files[0]
@@ -135,7 +146,7 @@ process DOMAIN_MATCH {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/domain_matches/${meta.protein}",
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/${meta.protein}/",
         mode: 'copy',
         pattern: "*_domain_matches.tsv"
 
@@ -738,66 +749,6 @@ process STANDARDIZE_OUTPUTS {
     """
 }
 
-process PHIDRA_ONLY_SUMMARY {
-    tag "${meta.id}:${meta.protein}"
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/without_top_hit_annotation/${meta.protein}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-    container "containers/phidra/phidra.sif"
-
-    input:
-        tuple val(meta), path(fasta)
-
-    output:
-        tuple val(meta), path("${meta.protein}_phidra_only.tsv"), emit: results
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import json
-   
-    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-    meta_dataset = "${meta.id}"
-
-    def get_drop(dataset):
-        raw = orf_coord_map.get(dataset)
-        if raw is None:
-            raw = orf_coord_map.get(dataset.upper())
-        try:
-            return int(raw)
-        except Exception:
-            return int(orf_coord_default)
-
-    protein = "${meta.protein}"
-    # Process FASTA file to get ORF information
-    orfs = []
-    current_header = None
-    with open("${fasta}") as f:
-        for line in f:
-            if line.startswith('>'):
-                current_header = line.strip()[1:]
-                orfs.append(current_header)
-    
-    # Create DataFrame with same structure as annotate_top_hits output
-    results = []
-    for orf in orfs:
-        genome_id = '_'.join(orf.split('_')[:get_drop(meta_dataset)])
-        results.append({
-            'genome_id': genome_id,
-            'orf_id': orf,
-            'identified': 'Phidra_Only',
-            'genofeature': protein,  # Empty as specified
-            'protein': protein
-        })
-    
-    # Create and save DataFrame
-    df = pd.DataFrame(results)
-    df.to_csv("${meta.protein}_phidra_only.tsv", sep='\\t', index=False)
-
-    print(f"Processed {len(results)} ORFs with no hits for ${meta.protein}")
-    """
-}
 
 process ANNOTATE_HITS {
     tag "${meta.id}:${meta.protein}"
@@ -808,7 +759,7 @@ process ANNOTATE_HITS {
 
     input:
     tuple val(meta), 
-          path(pfam_validated_fasta),
+          path(criteria_tsv),
           path(initial_search, stageAs: 'initial_search.tsv'),
           path(recursive_search, stageAs: 'recursive_search.tsv')
 
@@ -828,7 +779,7 @@ meta_dataset = "${meta.id}"
 protein = "${meta.protein}"
 orf_coord_default = -3
 
-pfam_validated_fasta = "${pfam_validated_fasta}"
+criteria_tsv = "${criteria_tsv}"
 file1_path = "initial_search.tsv"
 file2_path = "recursive_search.tsv"
 output_file = "${meta.protein}_annotated_hits.tsv"
@@ -844,7 +795,7 @@ def get_drop(dataset):
 
 def load_validated_ids():
     validated_ids = set()
-    with open(pfam_validated_fasta, 'r') as f:
+    with open(criteria_tsv, 'r') as f:
         for record in SeqIO.parse(f, 'fasta'):
             validated_ids.add(record.id)
     print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
@@ -1215,10 +1166,16 @@ workflow ANNOTATE_PROTEINS {
 
         // ----------------------------------------------------------------------
 
+
+
+        // Addressed
         PHIDRA_ONLY_SUMMARY(ch_branched.phidra_only
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
                 tuple(meta, val_fasta)
             })
+
+
+
 
         DOMAIN_MATCH(ch_branched.pfam
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
