@@ -143,115 +143,47 @@ combined_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
 }
 
 process DOMAIN_MATCH {
-    tag "${meta.id}:${meta.protein}"
+    tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/${meta.protein}/",
-        mode: 'copy',
-        pattern: "*_domain_matches.tsv"
 
     input:
-        tuple val(meta), path(fasta), path(pfam_tsv), val(pfam_map)
+        tuple val(meta), path(criteria_tsv)
 
     output:
-        tuple val(meta), path("${meta.protein}_domain_matches.tsv"), emit: results
+        tuple val(meta), path("${meta.id}_annotation_criteria.tsv"), emit: results
 
     script:
-    def pfam_map_json = groovy.json.JsonOutput.toJson(pfam_map)
+    def map_json = groovy.json.JsonOutput.toJson(params.pfam_annotation_map)
+    def domain_list = groovy.json.JsonOutput.toJson(params.domain_proteins ?: [])
+
     """
 #!/usr/bin/env python3
-import os
 import json
 import pandas as pd
-from Bio import SeqIO
 
-protein = "${meta.protein}"
-pfam_validated_tsv = "${pfam_tsv}"
-pfam_validated_fasta = "${fasta}"
-output_file = "${meta.protein}_domain_matches.tsv"
+df = pd.read_csv("${criteria_tsv}", sep="\\t", dtype=str, keep_default_na=False)
 
-# Inline mapping injected from nextflow (PF -> label)
-pfam_map = json.loads('${pfam_map_json}')
+pfam_map = json.loads('${map_json}')
+domain_proteins = set(json.loads('${domain_list}'))
 
-# load orf coord mapping
-orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-meta_dataset = "${meta.id}"
+mask = df["Protein"].isin(domain_proteins)
 
+for i in df[mask].index:
+    pfams = str(df.at[i, "Pfam_IDs"])
 
-# build lookup pfam_id -> label (normalize keys to uppercase)
-pfam_to_label = {}
-for k, v in pfam_map.items():
-    k_up = str(k).upper()
-    v_str = str(v)
-    # handle either key->PF or value->PF styles
-    if k_up.startswith('PF'):
-        pfam_to_label[k_up] = v_str
-    elif str(v).upper().startswith('PF'):
-        pfam_to_label[str(v).upper()] = k
-    else:
-        # fallback - no PF found, just map as provided
-        pfam_to_label[k_up] = v_str
-
-def derive_contig_id(query_id):
-    parts = str(query_id).split('_')
-    try:
-        raw = orf_coord_map.get(meta_dataset)
-        if raw is None:
-            raw = orf_coord_map.get(meta_dataset.upper())
-        drop = int(raw) if raw is not None else -3
-    except Exception:
-        drop = -3
-    if drop == 0:
-        return query_id
-    if len(parts) > drop:
-        return '_'.join(parts[:drop])
-    return query_id
-
-# Read the Pfam validated report
-try:
-    df = pd.read_csv(pfam_validated_tsv, sep='\\t', engine='python', dtype=str, keep_default_na=False)
-except Exception as e:
-    print(f"ERROR reading {pfam_validated_tsv}: {e}")
-    df = pd.DataFrame(columns=['Query_ID', 'Pfam_IDs'])
-
-out_rows = []
-for _, row in df.iterrows():
-    query = row.get('Query_ID') or row.get('QueryID') or row.get('Query') or ''
-    pfam_ids = row.get('Pfam_IDs') or row.get('Pfam_ID') or ''
-    if not query:
+    if not pfams:
         continue
 
-    # split all pfam ids, normalize to uppercase, and try to map any of them
-    pfam_list = []
-    if isinstance(pfam_ids, str) and pfam_ids:
-        pfam_list = [p.strip().upper() for p in pfam_ids.split('|') if p.strip()]
+    pf_list = [p.strip().upper() for p in pfams.split("|") if p.strip()]
 
-    genofeature_label = None
-    for pid in pfam_list:
-        if pid in pfam_to_label:
-            genofeature_label = pfam_to_label[pid]
+    # assign genofeature based on first matching PFAM
+    for pf in pf_list:
+        if pf in pfam_map:
+            df.at[i, "genofeature"] = pfam_map[pf]
             break
 
-    # fallback: if no mapped label, use first pfam id (or empty)
-    if not genofeature_label:
-        genofeature_label = pfam_list[0] if pfam_list else ''
-    # fallback: if no mapped label, use the protein name
-    if not genofeature_label:
-        genofeature_label = protein
-
-    contig_id = derive_contig_id(query)
-
-    out_rows.append({
-        'contig_id': contig_id,
-        'orf_id': query,
-        'identified': 'Domain_Match',
-        'genofeature': genofeature_label,
-        'protein': protein
-    })
-
-out_df = pd.DataFrame(out_rows, columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein'])
-out_df.to_csv(output_file, sep='\\t', index=False)
-print(f"Wrote {len(out_df)} domain matches to {output_file}")
+df.to_csv("${meta.id}_annotation_criteria.tsv", sep="\\t", index=False)
     """
 }
 
