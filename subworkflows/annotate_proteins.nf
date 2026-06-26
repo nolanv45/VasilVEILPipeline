@@ -958,16 +958,12 @@ workflow ANNOTATE_PROTEINS {
         // JOIN CRITERIA TSV WITH PHIDRA RESULTS
         // ----------------------------------------------------------------------
         ch_tsv = CRITERIA_TSV.out.map { meta, tsv -> [meta.id, tsv] }
-        ch_tsv.view { id, tsv -> "TSV: $id" }
 
         ch_phidra_keyed = PHIDRA.out.results
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
                 [meta.id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs]
             }
-        ch_phidra_keyed.view { id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-            "PHIDRA_KEYED: $id:${meta.protein}" 
-        }
-
+ 
         ch_phidra_with_tsv = PHIDRA.out.results
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
                 [meta.id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs]
@@ -1041,7 +1037,6 @@ workflow ANNOTATE_PROTEINS {
         // MERGE ALL PER-PROTEIN TSVs BACK INTO ONE PER ID
         // ----------------------------------------------------------------------
         TOP_HIT_ANNOTATION.out.results
-            .view { meta, tsv -> "TOP_HIT_ANNOTATION OUT: ${meta.id}:${meta.protein} -> $tsv" }
             .mix(PASV_ANNOTATION.out.results, DOMAIN_MATCH_ANNOTATION.out.results, PHIDRA_ONLY.out.results)
             .map { meta, tsv -> [meta.id, tsv] }
             .groupTuple(by: 0)
@@ -1071,9 +1066,6 @@ workflow ANNOTATE_PROTEINS {
             }
 
         ch_analyze_input
-            .view { meta, tsv, metadata_file, cleaned_fasta ->
-                "ANALYZE_AND_PLOT input: protein=${meta.protein} tsv=${tsv}"
-            }
             | ANALYZE_AND_PLOT
 
 
