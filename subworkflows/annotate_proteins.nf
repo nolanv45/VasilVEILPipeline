@@ -93,7 +93,6 @@ file_list = [${file_list_str}]
 
 validated_files   = [f for f in file_list if f.endswith("_pfam_validated_report.tsv")]
 unvalidated_files = [f for f in file_list if f.endswith("_pfam_unvalidated_report.tsv")]
-pasv_files        = [f for f in file_list if f.endswith("_processed.tsv")]
 
 all_phidra_dfs = []
 
@@ -103,10 +102,9 @@ for f in validated_files:
         df['PHIDRA'] = "Yes"
         df['PASV'] = "No"
         df['PASV_Spans'] = ""
-        df['PASV_Signature'] = ""
         df['Dataset'] = "${meta.id}"
         df['Protein'] = os.path.basename(f).split("_", 1)[0]
-        df['Genofeature'] = ""
+        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]  # set genofeature to protein by default, specify by method of annotation downstream
         all_phidra_dfs.append(df)
 
 for f in unvalidated_files:
@@ -115,35 +113,19 @@ for f in unvalidated_files:
         df['PHIDRA'] = "No"
         df['PASV'] = "No"
         df['PASV_Spans'] = ""
-        df['PASV_Signature'] = ""
         df['Dataset'] = "${meta.id}"
         df['Protein'] = os.path.basename(f).split("_", 1)[0]
-        df['Genofeature'] = ""
+        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]  # set genofeature to protein by default, specify by method of annotation downstream
         all_phidra_dfs.append(df)
 
 combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
-
-if pasv_files:
-    pasv_path = pasv_files[0]
-    if os.path.exists(pasv_path):
-        pasv_df = pd.read_csv(pasv_path, sep='\\t')
-
-        spans_map = dict(zip(pasv_df['name'], pasv_df['spans']))
-        sig_map = dict(zip(pasv_df['name'], pasv_df['signature']))
-
-        for idx, row in combined_df.iterrows():
-            q = row['Query_ID']
-            if q in spans_map:
-                combined_df.at[idx,'PASV'] = "Yes"
-                combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
-                combined_df.at[idx,'PASV_Signature'] = str(sig_map[q])
 
 combined_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
 """
 }
 
-process DOMAIN_MATCH {
-    tag "${meta.id}"
+process DOMAIN_MATCH_ANNOTATION {
+    tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
 
@@ -151,11 +133,10 @@ process DOMAIN_MATCH {
         tuple val(meta), path(criteria_tsv)
 
     output:
-        tuple val(meta), path("${meta.id}_annotation_criteria.tsv"), emit: results
+        tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
 
     script:
     def map_json = groovy.json.JsonOutput.toJson(params.pfam_annotation_map)
-    def domain_list = groovy.json.JsonOutput.toJson(params.domain_proteins ?: [])
 
     """
 #!/usr/bin/env python3
@@ -165,25 +146,20 @@ import pandas as pd
 df = pd.read_csv("${criteria_tsv}", sep="\\t", dtype=str, keep_default_na=False)
 
 pfam_map = json.loads('${map_json}')
-domain_proteins = set(json.loads('${domain_list}'))
 
-mask = df["Protein"].isin(domain_proteins)
+mask = df["Protein"] == "${meta.protein}"
 
-for i in df[mask].index:
-    pfams = str(df.at[i, "Pfam_IDs"])
-
+for idx in df[mask].index:
+    pfams = df.at[idx, "Pfam_IDs"]
     if not pfams:
         continue
-
     pf_list = [p.strip().upper() for p in pfams.split("|") if p.strip()]
-
-    # assign genofeature based on first matching PFAM
     for pf in pf_list:
         if pf in pfam_map:
-            df.at[i, "genofeature"] = pfam_map[pf]
+            df.at[idx, "Genofeature"] = pfam_map[pf]
             break
 
-df.to_csv("${meta.id}_annotation_criteria.tsv", sep="\\t", index=False)
+df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
     """
 }
 
@@ -242,6 +218,44 @@ process PASV {
     """
 }
 
+process PASV_ANNOTATION {
+    tag "${meta.id}:${meta.protein}"
+    container "containers/phidra/phidra.sif"
+    label 'standard'
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/pasv_annotation/${meta.protein}",
+        mode: 'copy',
+        pattern: "${meta.protein}_annotation_criteria.tsv"
+
+    input:
+        tuple val(meta),
+              path(criteria_tsv),
+              path(pasv_signatures, stageAs: 'pasv_signatures.tsv')
+
+    output:
+        tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
+
+    script:
+    """
+#!/usr/bin/env python3
+import pandas as pd
+
+df = pd.read_csv("${criteria_tsv}", sep="\\t", dtype=str, keep_default_na=False)
+df_pasv = pd.read_csv("pasv_signatures.tsv", sep="\\t", dtype=str, keep_default_na=False)
+
+pasv_map = df_pasv.set_index("name")[["signature", "spans"]].to_dict(orient="index")
+
+mask = df["Protein"] == "${meta.protein}"
+
+for idx in df[mask].index:
+    query_id = df.at[idx, "Query_ID"]
+    if query_id in pasv_map:
+        df.at[idx, "PASV"] = "Yes"
+        df.at[idx, "Genofeature"] = pasv_map[query_id]["signature"]
+        df.at[idx, "PASV_Spans"] = pasv_map[query_id]["spans"]
+
+df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
+    """
+}
 
 process ANALYZE_AND_PLOT {
     tag "${meta.id}"
@@ -405,7 +419,7 @@ process PASV_POST {
         }
 
     input:
-        tuple val(meta), path(pasv_file), path(metadata_file)
+        tuple val(meta), path(pasv_file), path(metadata_file), path(criteria_tsv)
 
     output:
         tuple val(meta),
@@ -416,6 +430,30 @@ process PASV_POST {
 
     script:
     """
+
+if pasv_files:
+    pasv_path = pasv_files[0]
+    if os.path.exists(pasv_path):
+        pasv_df = pd.read_csv(pasv_path, sep='\\t')
+
+        spans_map = dict(zip(pasv_df['name'], pasv_df['spans']))
+        sig_map = dict(zip(pasv_df['name'], pasv_df['signature']))
+
+        for idx, row in combined_df.iterrows():
+            q = row['Query_ID']
+            if q in spans_map:
+                combined_df.at[idx,'PASV'] = "Yes"
+                combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
+
+
+
+
+
+
+
+
+
+
 #!/usr/bin/env python3
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -682,12 +720,12 @@ process STANDARDIZE_OUTPUTS {
 }
 
 
-process ANNOTATE_HITS {
+process TOP_HIT_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/top_hit_annotation/${meta.protein}", 
         mode: 'copy',
-        pattern: "*_annotated_hits.tsv"
+        pattern: "${meta.protein}_annotated_hits.tsv"
 
     input:
     tuple val(meta), 
@@ -696,117 +734,38 @@ process ANNOTATE_HITS {
           path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
-    tuple val(meta), file("${meta.protein}_annotated_hits.tsv"), emit: results
+    tuple val(meta), file("${meta.protein}_annotation_criteria.tsv"), emit: results
 
     script:
     """
 #!/usr/bin/env python3
-import sys
 import os
-from Bio import SeqIO
-import json
+import pandas as pd
 
-orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-meta_dataset = "${meta.id}"
-protein = "${meta.protein}"
-orf_coord_default = -3
+df = pd.read_csv("${criteria_tsv}", sep="\\t", dtype=str, keep_default_na=False)
 
-criteria_tsv = "${criteria_tsv}"
-file1_path = "initial_search.tsv"
-file2_path = "recursive_search.tsv"
-output_file = "${meta.protein}_annotated_hits.tsv"
+def build_hit_map(filepath):
+    if not os.path.exists(filepath):
+        return {}
+    hits = pd.read_csv(filepath, sep="\\t", dtype=str, keep_default_na=False)
+    return {
+        row.iloc[0]: row.iloc[1].split("_")[0]
+        for _, row in hits.iterrows()
+    }
 
-def get_drop(dataset):
-    raw = orf_coord_map.get(dataset)
-    if raw is None:
-        raw = orf_coord_map.get(dataset.upper())
-    try:
-        return int(raw)
-    except Exception:
-        return int(orf_coord_default)
+initial_map   = build_hit_map("initial_search.tsv")
+recursive_map = build_hit_map("recursive_search.tsv")
 
-def load_validated_ids():
-    validated_ids = set()
-    with open(criteria_tsv, 'r') as f:
-        for record in SeqIO.parse(f, 'fasta'):
-            validated_ids.add(record.id)
-    print(f"Loaded {len(validated_ids)} validated sequences from Pfam")
-    return validated_ids
+mask = df["Protein"] == "${meta.protein}"
 
-def parse_contig_orf(query_id):
-    parts = query_id.split("_")
-    contig_id = "_".join(parts[:get_drop(meta_dataset)])
-    return contig_id, query_id
+for idx in df[mask].index:
+    query_id = df.at[idx, "Query_ID"]
+    if query_id in initial_map:
+        df.at[idx, "Genofeature"] = initial_map[query_id]
+    elif query_id in recursive_map:
+        df.at[idx, "Genofeature"] = recursive_map[query_id]
 
-def get_signature(target_id):
-    return target_id.split("_")[0]
-
-def process_files(file_path, validated_ids, source_type="Top_Hit_Annotation", query_label_map=None):
-    results = []
-    if not os.path.exists(file_path):
-        print(f"Warning: {file_path} does not exist")
-        return results
-    with open(file_path, "r") as f:
-        next(f)
-        for line in f:
-            parts = line.strip().split("\\t")
-            if len(parts) < 2:
-                continue
-            query_id = parts[0]
-            target_id = parts[1]
-            if query_id in validated_ids:
-                contig_id, orf_id = parse_contig_orf(query_id)
-                if source_type == "Recursive_Hit_Annotation" and query_label_map is not None:
-                    # Recursive Target_ID points to sequence IDs from the recursive DB.
-                    # Map by recursive target first, then fallback to query, then raw target prefix.
-                    signature = query_label_map.get(target_id)
-                    if signature is None:
-                        signature = query_label_map.get(query_id, get_signature(target_id))
-                else:
-                    signature = get_signature(target_id)
-                results.append((contig_id, orf_id, signature, source_type, query_id))
-    return results
-
-def main():
-    print("DEBUG - Current directory:", os.getcwd())
-    validated_ids = load_validated_ids()
-    print("DEBUG - Files in directory:", os.listdir("."))
-
-    # Process both initial and recursive search results
-    initial_results = process_files(file1_path, validated_ids, "Top_Hit_Annotation")
-
-    # Build initial mapping: initial Query_ID -> initial top-hit label.
-    query_to_initial_label = {}
-    for contig_id, orf_id, signature, identified, query_id in initial_results:
-        if query_id not in query_to_initial_label:
-            query_to_initial_label[query_id] = signature
-
-    recursive_results = process_files(
-        file2_path,
-        validated_ids,
-        "Recursive_Hit_Annotation",
-        query_label_map=query_to_initial_label,
-    )
-
-    # Combine and deduplicate - keep Top_Hit if both exist
-    result_dict = {}
-    for contig_id, orf_id, signature, identified, query_id in initial_results:
-        key = (contig_id, orf_id, signature)
-        result_dict[key] = (contig_id, orf_id, signature, identified)
-    for contig_id, orf_id, signature, identified, query_id in recursive_results:
-        key = (contig_id, orf_id, signature)
-        if key not in result_dict:
-            result_dict[key] = (contig_id, orf_id, signature, identified)
-
-    print(f"Processing initial: {len(initial_results)}, recursive: {len(recursive_results)}, combined: {len(result_dict)}")
-
-    with open(output_file, "w") as f:
-        f.write("genome_id\\torf_id\\tidentified\\tgenofeature\\tprotein\\n")
-        for contig_id, orf_id, signature, identified in result_dict.values():
-            f.write(f"{contig_id}\\t{orf_id}\\t{identified}\\t{signature}\\t{protein}\\n")
-
-if __name__ == "__main__":
-    main()
+df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
     """
 }
 
@@ -847,53 +806,6 @@ process DUPLICATE_HANDLE {
     """
 }
 
-
-
-process COMBINE_PHIDRA_TSV {
-    tag "${meta.id}"
-    container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}/phidra_analysis", 
-        mode: 'copy'
-
-    input:
-    tuple val(meta), path(tsv_files)
-
-    output:
-        tuple val(meta), path('combined_phidra_output.tsv'), emit: combined
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
-
-
-    dfs = []
-    for tsv_file in "${tsv_files}".split():
-        if os.path.exists(tsv_file):
-            print(f"Reading file: {tsv_file}")
-            try:
-                df = pd.read_csv(tsv_file, sep='\\t')
-                if not df.empty:
-                    dfs.append(df)
-                    print(f"Added {len(df)} rows from {tsv_file}")
-                else:
-                    print(f"Warning: Empty DataFrame from {tsv_file}")
-            except Exception as e:
-                print(f"Error reading {tsv_file}: {str(e)}")
-        else:
-            print(f"Warning: File not found: {tsv_file}")
-
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True)
-        print(f"Combined DataFrame has {len(combined)} rows")
-        combined.to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
-    else:
-        print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein']).to_csv("combined_phidra_output.tsv", sep='\\t', index=False)
-    """
-}
 
 
 process SPLIT_BY_GENOFEATURE {
@@ -994,8 +906,66 @@ process COMBINE_DATASETS {
     """
 }
 
+process MERGE_TSV {
+    tag "${meta.id}"
+    container "containers/phidra/phidra.sif"
+    label 'standard'
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
+        mode: 'copy'
 
+    input:
+        tuple val(meta), path(tsvs)
 
+    output:
+        tuple val(meta), path("${meta.id}_annotation_criteria.tsv"), emit: results
+
+    script:
+    def tsv_list = tsvs.collect { "\"${it}\"" }.join(", ")
+    """
+#!/usr/bin/env python3
+import pandas as pd
+
+tsv_files = [${tsv_list}]
+
+dfs = [pd.read_csv(f, sep="\\t", dtype=str, keep_default_na=False) for f in tsv_files]
+
+# Build a map of protein -> df that edited it
+# Each file is named {protein}_annotation_criteria.tsv
+import os
+protein_df_map = {}
+for f, df in zip(tsv_files, dfs):
+    protein = os.path.basename(f).split("_")[0]
+    protein_df_map[protein] = df
+
+# Use first df as base structure
+base = dfs[0].set_index("Query_ID")
+
+# For each protein, take only that protein's rows from the authoritative df
+for protein, df in protein_df_map.items():
+    df = df.set_index("Query_ID")
+    protein_rows = df[df["Protein"] == protein]
+    base.update(protein_rows)
+
+base.reset_index().to_csv("${meta.id}_annotation_criteria.tsv", sep="\\t", index=False)
+    """
+}
+
+process PHIDRA_ONLY {
+    tag "${meta.id}:${meta.protein}"
+    container "containers/phidra/phidra.sif"
+    label 'standard'
+
+    input:
+        tuple val(meta), path(criteria_tsv)
+
+    output:
+        tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
+
+    script:
+    """
+    cp ${criteria_tsv} ${meta.protein}_annotation_criteria.tsv
+    """
+}
 
 
 workflow ANNOTATE_PROTEINS {
@@ -1005,8 +975,10 @@ workflow ANNOTATE_PROTEINS {
     main:
         ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
+        // Normalize fasta input file
         CLEAN_FASTA_HEADERS(ch_dataset)
          
+        // Prepare PHIDRA input
         ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
             .combine(Channel.fromList(params.proteins))
             .map { meta, fasta, protein_config -> 
@@ -1021,146 +993,197 @@ workflow ANNOTATE_PROTEINS {
                 // stage the subject DB file so Nextflow copies it into the task workdir
                 tuple(new_meta, fasta, file(protein_config.subjectDB), file(protein_config.pfamDomain))
             }
-
         PHIDRA(ch_dataset_proteins)
 
-        ch_branched = PHIDRA.out.results
-            .branch { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-                annotation: meta.protein.toLowerCase() in (params.tophit_proteins.collect { it.toLowerCase() })
-                pasv: meta.protein.toLowerCase() in (params.pasv_proteins.collect { it.toLowerCase() })
-                pfam: meta.protein.toLowerCase() in (params.domain_proteins.collect { it.toLowerCase() })
-                phidra_only: true
-            }
-
-        ch_pasv = ch_branched.pasv
-            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
-                def settings = (params.pasv_settings ?: [:]).get(meta.protein, [:])
-                def mapped_name = settings.mapped_name ?: "${meta.protein}_putative"
-                def roi_start   = settings.roi_start   ?: ''
-                def roi_end     = settings.roi_end     ?: ''
-                def cat_sites   = settings.cat_sites   ?: ''
-                def expected_sigs  = settings.expected_sigs   ?: ''
-    
-                def new_meta = meta + [
-                    mapped_name: mapped_name,
-                    roi_start: roi_start,
-                    roi_end: roi_end,
-                    cat_sites: cat_sites,
-                    expected_sigs: expected_sigs
-                ]
-                tuple(new_meta, val_fasta, unval_fasta, meta.pasv_align_refs)
-            }
-
-
-        ANNOTATE_HITS(ch_branched.annotation.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-            tuple(meta, val_fasta, init, recurs)
-        }
-        )
-
-        PASV(ch_pasv)
-
-        ch_pasv_post_input = PASV.out.results
-            .combine(ch_metadata)
-            .map { meta, pasv_file, metadata_file ->
-                tuple(meta, pasv_file, metadata_file)
-            }
-
-        PASV_POST(ch_pasv_post_input)
-
-
         // ----------------------------------------------------------------------
-        // FIXED CHANNELS: Placed downstream of their process dependencies
+        // CRITERIA TSV
         // ----------------------------------------------------------------------
-        // Extract the unvalidated reports
         ch_phidra_crit = PHIDRA.out.results
 
-        ch_unval_crit = ch_phidra_crit.map { items -> [items[0].id, items[4]] }
-        .view { x -> "UNVAL: $x" }
-        ch_val_crit   = ch_phidra_crit.map { items -> [items[0].id, items[2]] }
-        .view { x -> "VAL: $x" }
-
-        // Extract the PASV processed reports (using index 1 from its output tuple)
-        ch_pasv_crit  = PASV_POST.out.results.map { items -> [ items[0].id, items[1] ] }
-        .view { x -> "PASV: $x" }
+        ch_unval_crit = ch_phidra_crit.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> [meta.id, unval_pfam] }
+        ch_val_crit   = ch_phidra_crit.map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> [meta.id, val_pfam] }
 
         ch_criteria_input = ch_unval_crit
-            .mix(ch_val_crit, ch_pasv_crit)
-            .view { x -> "MIXED: $x" }
+            .mix(ch_val_crit)
             .groupTuple(by: 0)
-            .view { x -> "GROUPED: $x" }
-            .map { id, files ->
-                // Return a clean metadata map and a flat list of paths
-                return [ [id: id], files.flatten() ]
-            }
-            .view { x -> "FINAL INPUT: $x" }
+            .map { id, files -> [ [id: id], files.flatten() ] }
 
         CRITERIA_TSV(ch_criteria_input)
 
         // ----------------------------------------------------------------------
+        // JOIN CRITERIA TSV WITH PHIDRA RESULTS
+        // ----------------------------------------------------------------------
+        ch_tsv = CRITERIA_TSV.out.map { meta, tsv -> [meta.id, tsv] }
+        ch_tsv.view { id, tsv -> "TSV: $id" }
 
+        ch_phidra_keyed = PHIDRA.out.results
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                [meta.id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs]
+            }
+        ch_phidra_keyed.view { id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            "PHIDRA_KEYED: $id:${meta.protein}" 
+        }
 
-
-        DOMAIN_MATCH(ch_branched.pfam
-            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-                tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
-            })
-
-        ch_annotate = ANNOTATE_HITS.out.results ?: Channel.empty()
-        ch_domain_annotate_map = DOMAIN_MATCH.out.results ?: Channel.empty()
-        
-        // Combine channels
-        ch_phidra_results = ch_annotate
-            .mix(ch_phidra_only, ch_domain_annotate_map)
-            .map { meta, file -> tuple(meta.id, meta, file) } //add grouping key
-            .groupTuple(by: 0)  // Group by dataset ID
-            .map { id, metas, files -> tuple(metas[0], files.flatten()) } // Flatten the files array
-            
-
-        COMBINE_PHIDRA_TSV(ch_phidra_results)
-
-        ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
-            .combine(ch_metadata)
-            .map { meta, combined_file, metadata_file -> tuple(meta, combined_file, metadata_file) }
-
-        ANALYZE_AND_PLOT(ch_analyze_input)
-
-        ch_pasv_map = PASV_POST.out
-            .map { meta, processed_file, stats_file, plot_file -> tuple(meta, processed_file) }
-
-        ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
-        ch_pasv_map = ch_pasv_map ?: Channel.empty()
-
-        ch_files_to_standardize = ch_combined_phidra
-            .mix(ch_pasv_map)
-            .map { meta, file -> tuple(meta.id, meta, file) }
-            .groupTuple(by: 0)
-            .map { id, metas, files ->
-                def meta0 = metas[0]
-                def files_list = files.flatten().collect { it.toString() }
-                tuple(meta0, files_list)
+        ch_phidra_with_tsv = PHIDRA.out.results
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                [meta.id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs]
+            }
+            .combine(ch_tsv, by: 0)
+            .map { id, meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs, tsv ->
+                [meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs]
             }
 
-        STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+        ch_branched = ch_phidra_with_tsv
+            .branch { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                tophit: meta.protein.toLowerCase() in params.tophit_proteins.collect { it.toLowerCase() }
+                pasv:   meta.protein.toLowerCase() in params.pasv_proteins.collect { it.toLowerCase() }
+                domain: meta.protein.toLowerCase() in params.domain_proteins.collect { it.toLowerCase() }
+                other: true
+            }
 
-        ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
-            .map { meta, file -> file.toAbsolutePath() }
-            .collect()
+        ch_branched.tophit.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            "TOPHIT: ${meta.id}:${meta.protein}" 
+        }
+        ch_branched.pasv.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            "PASV: ${meta.id}:${meta.protein}" 
+        }
+        ch_branched.domain.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+            "DOMAIN: ${meta.id}:${meta.protein}" 
+        }
+        ch_phidra_with_tsv.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+            "PHIDRA_WITH_TSV: ${meta.id}:${meta.protein}"
+        }
+
+
+        ch_branched.other
+            .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                [meta, tsv]
+            }
+            | PHIDRA_ONLY
+
+        ch_branched.tophit
+            .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                [meta, tsv, init, recurs]
+            }
+            | TOP_HIT_ANNOTATION
+
+        ch_pasv_input = ch_branched.pasv
+            .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                def settings      = (params.pasv_settings ?: [:]).get(meta.protein, [:])
+                def mapped_name   = settings.mapped_name   ?: "${meta.protein}_putative"
+                def roi_start     = settings.roi_start     ?: ''
+                def roi_end       = settings.roi_end       ?: ''
+                def cat_sites     = settings.cat_sites     ?: ''
+                def expected_sigs = settings.expected_sigs ?: ''
+                def new_meta = meta + [
+                    mapped_name:   mapped_name,
+                    roi_start:     roi_start,
+                    roi_end:       roi_end,
+                    cat_sites:     cat_sites,
+                    expected_sigs: expected_sigs
+                ]
+                tuple(new_meta, val_fasta, unval_fasta, file(meta.pasv_align_refs))
+            }
+
+        ch_pasv_input | PASV
+
+        ch_pasv_tsv = ch_branched.pasv
+            .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                ["${meta.id}:${meta.protein}", tsv]
+            }
+
+        PASV.out.results
+            .map { meta, pasv_sig -> ["${meta.id}:${meta.protein}", meta, pasv_sig] }
+            .join(ch_pasv_tsv, by: 0)
+            .map { key, meta, pasv_sig, tsv -> [meta, tsv, pasv_sig] }
+            | PASV_ANNOTATION
+
+        ch_branched.domain
+            .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                [meta, tsv]
+            }
+            | DOMAIN_MATCH_ANNOTATION
+
+
+
+        // ----------------------------------------------------------------------
+        // MERGE ALL PER-PROTEIN TSVs BACK INTO ONE PER ID
+        // ----------------------------------------------------------------------
+        TOP_HIT_ANNOTATION.out.results
+            .view { meta, tsv -> "TOP_HIT_ANNOTATION OUT: ${meta.id}:${meta.protein} -> $tsv" }
+            .mix(PASV_ANNOTATION.out.results, DOMAIN_MATCH_ANNOTATION.out.results, PHIDRA_ONLY.out.results)
+            .map { meta, tsv -> [meta.id, tsv] }
+            .groupTuple(by: 0)
+            .map { id, tsvs -> [ [id: id], tsvs.flatten() ] }
+            | MERGE_TSV
+
+
+
+        // ch_pasv_post_input = PASV.out.results
+        //     .combine(ch_metadata)
+        //     .map { meta, pasv_file, metadata_file ->
+        //         tuple(meta, pasv_file, metadata_file)
+        //     }
+
+        // PASV_POST(ch_pasv_post_input)
+
+
+
+
+
+
+        // DOMAIN_MATCH_ANNOTATION(ch_branched.pfam
+        //     .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
+        //         tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
+        //     })
+
+        // ch_annotate = TOP_HIT_ANNOTATION.out.results ?: Channel.empty()
+        // ch_domain_annotate_map = DOMAIN_MATCH_ANNOTATION.out.results ?: Channel.empty()
+
+
+        // ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
+        //     .combine(ch_metadata)
+        //     .map { meta, combined_file, metadata_file -> tuple(meta, combined_file, metadata_file) }
+
+        // ANALYZE_AND_PLOT(ch_analyze_input)
+
+        // ch_pasv_map = PASV_POST.out
+        //     .map { meta, processed_file, stats_file, plot_file -> tuple(meta, processed_file) }
+
+        // ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
+        // ch_pasv_map = ch_pasv_map ?: Channel.empty()
+
+        // ch_files_to_standardize = ch_combined_phidra
+        //     .mix(ch_pasv_map)
+        //     .map { meta, file -> tuple(meta.id, meta, file) }
+        //     .groupTuple(by: 0)
+        //     .map { id, metas, files ->
+        //         def meta0 = metas[0]
+        //         def files_list = files.flatten().collect { it.toString() }
+        //         tuple(meta0, files_list)
+        //     }
+
+        // STANDARDIZE_OUTPUTS(ch_files_to_standardize)
+
+        // ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
+        //     .map { meta, file -> file.toAbsolutePath() }
+        //     .collect()
         
-        COMBINE_DATASETS(ch_combine_datasets)
+        // COMBINE_DATASETS(ch_combine_datasets)
 
-        DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
+        // DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
 
-        ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-            STANDARDIZE_OUTPUTS.out
-        )
-        // Barrier token: count() emits only after split channel is fully complete
-        ch_split_ready = ch_split_by_genofeature.count()
-        ch_combined_tsv = COMBINE_DATASETS.out.combined
-            .combine(ch_split_ready)
-            .map { combined_tsv, split_count -> combined_tsv }
+        // ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
+        //     STANDARDIZE_OUTPUTS.out
+        // )
+        // // Barrier token: count() emits only after split channel is fully complete
+        // ch_split_ready = ch_split_by_genofeature.count()
+        // ch_combined_tsv = COMBINE_DATASETS.out.combined
+        //     .combine(ch_split_ready)
+        //     .map { combined_tsv, split_count -> combined_tsv }
   
-    emit:
-        ch_combined_tsv
+    // emit:
+    //     ch_combined_tsv
 }
 
 
