@@ -24,7 +24,7 @@ workflow {
         // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
         def firstRes = ANNOTATE_PROTEINS(ch_datasets)
 
-        EMBEDDING_PARAMETER_DECISION(firstRes.ch_combined_tsv)
+        // EMBEDDING_PARAMETER_DECISION(firstRes.ch_combined_tsv)
     }
     else {
         EMBEDDING_PARAMETER_DECISION(Channel.fromPath("${params.outdir}/combined_datasets.tsv"))
