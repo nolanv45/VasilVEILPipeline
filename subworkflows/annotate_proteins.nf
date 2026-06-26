@@ -220,9 +220,6 @@ process PASV_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/pasv_annotation/${meta.protein}",
-        mode: 'copy',
-        pattern: "${meta.protein}_annotation_criteria.tsv"
 
     input:
         tuple val(meta),
@@ -256,25 +253,24 @@ df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
 }
 
 process ANALYZE_AND_PLOT {
-    tag "${meta.id}"
+    tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/${meta.id}", 
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_annotation_analysis/phidra_annotation/stats/${filename}"
-            else if (filename.endsWith('.png')) "03_annotation_analysis/phidra_annotation/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_annotation_analysis/phidra_annotation/${meta.protein}/${filename}"
+            else if (filename.endsWith('.png')) "03_annotation_analysis/phidra_annotation/${meta.protein}/${filename}"
             else null
         }
 
     input:
-        tuple val(meta), path(input_tsv), path(metadata_file)
+        tuple val(meta), path(input_tsv), path(metadata_file), path(cleaned_fasta)
 
     output:
-        tuple val(meta), 
-              path("protein_stats.tsv"),
-              path("length_distribution.png"),
-              emit: results
-
+        tuple val(meta),
+            path("${meta.protein}_stats.tsv"),
+            path("${meta.protein}_length_distribution.png"),
+            emit: results
     script:
     """
 #!/usr/bin/env python3
@@ -310,11 +306,12 @@ def load_genofeature_colors(metadata_path):
         return {}, {}
 
 # Read and process input data
-df = pd.read_csv("${input_tsv}", sep='\\t')
+df = pd.read_csv("${input_tsv}", sep='\\t', dtype=str, keep_default_na=False)
+df = df[df["protein"] == "${meta.protein}"].copy()
 print(f"Processing data with {len(df)} entries")
 
 # Always compute ORF length from sequence to avoid header naming inconsistencies.
-seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+seq_lengths = load_sequence_lengths("${cleaned_fasta}")
 df['ORF_length'] = df['orf_id'].map(seq_lengths)
 
 # Keep only valid numeric lengths for statistics and plotting.
@@ -332,7 +329,7 @@ stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_lengt
 stats = stats.sort_values('genofeature')
 
 # Save statistics
-stats.to_csv("protein_stats.tsv", sep='\\t', index=False)
+stats.to_csv("${meta.protein}_stats.tsv", sep='\\t', index=False)
 
 # Create a violin plot with the same overall treatment used by PASV_POST.
 fig, ax_plot = plt.subplots(
@@ -397,7 +394,7 @@ ax_plot.grid(True, axis='x', linestyle='--', alpha=0.7)
 ax_plot.tick_params(axis='y', labelsize=10, pad=28)
 
 fig.tight_layout()
-fig.savefig("length_distribution.png", bbox_inches='tight', dpi=300)
+fig.savefig("${meta.protein}_length_distribution.png", bbox_inches='tight', dpi=300)
 plt.close()
     """
 }
@@ -411,47 +408,26 @@ process PASV_POST {
         mode: 'copy',
         pattern: "*.{tsv,png}",
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_annotation_analysis/pasv_annotation/${meta.protein}/stats/${filename}"
-            else if (filename.endsWith('.png')) "03_annotation_analysis/pasv_annotation/${meta.protein}/plots/${filename}"
+            if (filename.endsWith('.tsv')) "03_annotation_analysis/pasv_annotation/${meta.protein}/${filename}"
+            else if (filename.endsWith('.png')) "03_annotation_analysis/pasv_annotation/${meta.protein}/${filename}"
             else null
         }
 
     input:
-        tuple val(meta), path(pasv_file), path(metadata_file), path(criteria_tsv)
+        tuple val(meta), 
+              path(pasv_file), 
+              path(metadata_file),
+              path(cleaned_fasta),
+              path(filtered_tsv)
 
     output:
         tuple val(meta),
-              path("${meta.protein}_processed.tsv"),
               path("${meta.protein}_signature_stats.tsv"),
               path("${meta.protein}_signature_distribution.png"),
               emit: results
 
     script:
     """
-
-if pasv_files:
-    pasv_path = pasv_files[0]
-    if os.path.exists(pasv_path):
-        pasv_df = pd.read_csv(pasv_path, sep='\\t')
-
-        spans_map = dict(zip(pasv_df['name'], pasv_df['spans']))
-        sig_map = dict(zip(pasv_df['name'], pasv_df['signature']))
-
-        for idx, row in combined_df.iterrows():
-            q = row['Query_ID']
-            if q in spans_map:
-                combined_df.at[idx,'PASV'] = "Yes"
-                combined_df.at[idx,'PASV_Spans'] = str(spans_map[q])
-
-
-
-
-
-
-
-
-
-
 #!/usr/bin/env python3
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -490,31 +466,47 @@ def load_genofeature_colors(metadata_path):
 raw_expected = '${meta.expected_sigs}'
 tokens = re.findall(r"[A-Za-z0-9_]+", raw_expected or '')
 expected_sigs = set(t.upper() for t in tokens if t)
+
 try:
     threshold = float(${params.pasv_threshold})
 except Exception:
     threshold = 0.01
 
-# Read and process the PASV file
+# Load filtered orf_ids that passed APPLY_CRITERIA rules for this protein
+filtered = pd.read_csv("${filtered_tsv}", sep='\\t', dtype=str, keep_default_na=False)
+passed_ids = set(filtered[filtered["protein"] == "${meta.protein}"]["orf_id"])
+
+# Read and process the PASV file, filtering to passed IDs only
 print(f"Processing PASV file for ${meta.protein}")
 df = pd.read_csv("${pasv_file}", sep='\\t')
-print(f"Initial data shape: {df.shape}")
+df = df[df['name'].isin(passed_ids)].copy()
+print(f"After criteria filter: {df.shape}")
+
+if df.empty:
+    print("WARNING: no sequences passed criteria for ${meta.protein}", file=sys.stderr)
+    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
+    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
+    fig, ax = plt.subplots()
+    ax.text(0.5, 0.5, 'No data passed criteria', ha='center', va='center')
+    plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
+    plt.close()
+    exit(0)
 
 # Remove signatures with gaps
 processed_df = df[~df['signature'].str.contains('-')].copy()
-print(f"After removing gaps: {processed_df.shape}")
 
-# Derive ORF lengths from actual amino-acid sequences, not ORF header naming.
-seq_lengths = load_sequence_lengths("${meta.cleaned_fasta}")
+# Derive ORF lengths from actual amino-acid sequences
+seq_lengths = load_sequence_lengths("${cleaned_fasta}")
 processed_df['orf_length'] = processed_df['name'].map(seq_lengths)
 processed_df = processed_df.dropna(subset=['orf_length']).copy()
+
 color_map, color_map_lower = load_genofeature_colors("${metadata_file}")
 
-# Create span classes based on spans_start and spans_end columns
+# Create span classes
 processed_df['span_class'] = processed_df.apply(
-    lambda row: 'both' if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
-               else 'start' if row['spans_start'] == 'Yes'
-               else 'end' if row['spans_end'] == 'Yes'
+    lambda row: 'both'    if row['spans_start'] == 'Yes' and row['spans_end'] == 'Yes'
+               else 'start'   if row['spans_start'] == 'Yes'
+               else 'end'     if row['spans_end'] == 'Yes'
                else 'neither',
     axis=1
 )
@@ -524,9 +516,7 @@ min_count = max(1, math.ceil(total_features * threshold))
 print(f"Total features: {total_features}, min_count threshold: {min_count}", file=sys.stderr)
 
 sig_counts = processed_df['signature'].value_counts().to_dict()
-keep_sigs = set([s for s,c in sig_counts.items() if c >= min_count])
-keep_sigs |= set(expected_sigs)
-dropped = sorted([s for s in sig_counts.keys() if s not in keep_sigs])
+keep_sigs = set([s for s, c in sig_counts.items() if c >= min_count]) | expected_sigs
 processed_df = processed_df[processed_df['signature'].isin(keep_sigs)].copy()
 
 # Generate statistics
@@ -535,31 +525,21 @@ stats = processed_df.groupby(['signature', 'span_class']).agg({
 }).reset_index()
 stats.columns = ['signature', 'span_class', 'count', 'mean_length', 'std_length', 'min_length', 'max_length']
 
-# Sort signatures by count for better visualization
 signature_order = stats.groupby('signature')['count'].sum().sort_values(ascending=True).index
 
-# Create visualization
 span_classes = sorted(processed_df['span_class'].unique())
 n_signatures = len(signature_order)
 
-# Set figure dimensions
-height_per_sig = 0.4
-fig_height = max(8, n_signatures * height_per_sig)
+fig_height = max(8, n_signatures * 0.4)
 fig_width = len(span_classes) * 12
 
-# Create figure
 fig, axes = plt.subplots(1, len(span_classes),
-                        figsize=(fig_width, fig_height),
-                        sharey=True)
+                         figsize=(fig_width, fig_height),
+                         sharey=True)
 
 if len(span_classes) == 1:
     axes = [axes]
 
-print(f"Creating plots for {len(span_classes)} span classes and {n_signatures} signatures")
-
-
-
-# Plot for each span class
 for i, span in enumerate(span_classes):
     ax = axes[i]
     span_data = processed_df[processed_df['span_class'] == span]
@@ -569,25 +549,23 @@ for i, span in enumerate(span_classes):
             sig: color_map.get(sig, color_map_lower.get(str(sig).lower(), '#808080'))
             for sig in signature_order
         }
-        # Create violinplot
         sns.violinplot(data=span_data,
-                   x='orf_length',
-                   y='signature',
-                   order=signature_order,
-                   hue='signature',
-                   palette=signature_palette,
-                   orient='h',
-                   dodge=False,
-                   inner='quartile',
-                   linewidth=1,
-                   cut=0,
-                   ax=ax)
+                       x='orf_length',
+                       y='signature',
+                       order=signature_order,
+                       hue='signature',
+                       palette=signature_palette,
+                       orient='h',
+                       dodge=False,
+                       inner='quartile',
+                       linewidth=1,
+                       cut=0,
+                       ax=ax)
 
         legend = ax.get_legend()
         if legend is not None:
             legend.remove()
 
-        # Add a single boxed count/mean label per genofeature.
         span_stats = stats[stats['span_class'] == span]
         for idx, sig in enumerate(signature_order):
             sig_stats = span_stats[span_stats['signature'] == sig]
@@ -595,14 +573,11 @@ for i, span in enumerate(span_classes):
                 count = int(sig_stats['count'].iloc[0])
                 mean = sig_stats['mean_length'].iloc[0]
                 ax.text(
-                    1.01,
-                    idx,
+                    1.01, idx,
                     f"N={count}\\nμ={mean:.1f}",
                     transform=ax.get_yaxis_transform(),
-                    ha='left',
-                    va='center',
-                    fontsize=10,
-                    fontweight='bold',
+                    ha='left', va='center',
+                    fontsize=10, fontweight='bold',
                     clip_on=False,
                     bbox=dict(boxstyle='round,pad=0.35', facecolor='white', edgecolor='0.45', alpha=0.95)
                 )
@@ -610,20 +585,15 @@ for i, span in enumerate(span_classes):
     ax.set_title(f"Span: {span}")
     ax.set_xlabel("ORF Length (aa)")
     ax.grid(True, alpha=0.3)
-
-    # Ensure y-labels are readable
     ax.tick_params(axis='y', labelsize=10, pad=40)
 
-# Adjust layout
 plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
-fig.suptitle(f"${meta.protein} Signature Distribution", fontsize=16, y=1.02)
+fig.suptitle("${meta.protein} Signature Distribution", fontsize=16, y=1.02)
 
-# Save outputs
-processed_df.to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
 stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
 plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
 plt.close()
-"""
+    """
 }
 
 
@@ -738,7 +708,7 @@ process SPLIT_BY_GENOFEATURE {
         mode: 'copy'
 
     input:
-        tuple val(meta), path(filtered_tsv)
+        tuple val(meta), path(filtered_tsv), path(cleaned_fasta)
 
     output:
         tuple val(meta), path("protein_genofeature_fastas"), emit: fastas_for_embeddings
@@ -753,7 +723,7 @@ process SPLIT_BY_GENOFEATURE {
     # Create the base output directory
     os.makedirs("protein_genofeature_fastas", exist_ok=True)
     df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${meta.cleaned_fasta}", "fasta"))
+    seq_dict = SeqIO.to_dict(SeqIO.parse("${cleaned_fasta}", "fasta"))
 
     # Group by protein and genofeature
     for protein in df['protein'].unique():
@@ -825,7 +795,7 @@ process COMBINE_DATASETS {
         combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
     else:
         print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
+        pd.DataFrame(columns=['contig_id', 'orf_id', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
     """
 }
 
@@ -1015,19 +985,6 @@ workflow ANNOTATE_PROTEINS {
                 other: true
             }
 
-        ch_branched.tophit.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-            "TOPHIT: ${meta.id}:${meta.protein}" 
-        }
-        ch_branched.pasv.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-            "PASV: ${meta.id}:${meta.protein}" 
-        }
-        ch_branched.domain.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-            "DOMAIN: ${meta.id}:${meta.protein}" 
-        }
-        ch_phidra_with_tsv.view { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
-            "PHIDRA_WITH_TSV: ${meta.id}:${meta.protein}"
-        }
-
 
         ch_branched.other
             .map { meta, tsv, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
@@ -1095,72 +1052,69 @@ workflow ANNOTATE_PROTEINS {
         // APPLIES RULESET BELOW
         MERGE_TSV.out.results | APPLY_CRITERIA
 
+        ch_cleaned_fasta = CLEAN_FASTA_HEADERS.out.fasta
+            .map { meta, fasta -> [meta.id, fasta] }
 
-        // ch_pasv_post_input = PASV.out.results
-        //     .combine(ch_metadata)
-        //     .map { meta, pasv_file, metadata_file ->
-        //         tuple(meta, pasv_file, metadata_file)
-        //     }
+        ch_analyze_input = PHIDRA.out.results
+            .filter { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
+                !(meta.protein.toLowerCase() in params.pasv_proteins.collect { it.toLowerCase() })
+            }
+            .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> [meta.id, meta] }
+            .combine(
+                APPLY_CRITERIA.out.results.map { meta, tsv -> [meta.id, tsv] },
+                by: 0
+            )
+            .combine(ch_cleaned_fasta, by: 0)
+            .combine(ch_metadata)
+            .map { id, meta, tsv, cleaned_fasta, metadata_file ->
+                tuple(meta, tsv, metadata_file, cleaned_fasta)
+            }
 
-        // PASV_POST(ch_pasv_post_input)
+        ch_analyze_input
+            .view { meta, tsv, metadata_file, cleaned_fasta ->
+                "ANALYZE_AND_PLOT input: protein=${meta.protein} tsv=${tsv}"
+            }
+            | ANALYZE_AND_PLOT
 
 
 
+        PASV.out.results
+            .map { meta, pasv_sig -> [meta.id, meta, pasv_sig] }
+            .combine(
+                APPLY_CRITERIA.out.results.map { meta, tsv -> [meta.id, tsv] },
+                by: 0
+            )
+            .combine(ch_cleaned_fasta, by: 0)
+            .combine(ch_metadata)
+            .map { id, meta, pasv_sig, filtered_tsv, cleaned_fasta, metadata_file ->
+                tuple(meta, pasv_sig, metadata_file, cleaned_fasta, filtered_tsv)
+            }
+            | PASV_POST
 
 
 
-        // DOMAIN_MATCH_ANNOTATION(ch_branched.pfam
-        //     .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs -> 
-        //         tuple(meta, val_fasta, val_pfam, params.pfam_annotation_map)
-        //     })
-
-        // ch_annotate = TOP_HIT_ANNOTATION.out.results ?: Channel.empty()
-        // ch_domain_annotate_map = DOMAIN_MATCH_ANNOTATION.out.results ?: Channel.empty()
-
-
-        // ch_analyze_input = COMBINE_PHIDRA_TSV.out.combined
-        //     .combine(ch_metadata)
-        //     .map { meta, combined_file, metadata_file -> tuple(meta, combined_file, metadata_file) }
-
-        // ANALYZE_AND_PLOT(ch_analyze_input)
-
-        // ch_pasv_map = PASV_POST.out
-        //     .map { meta, processed_file, stats_file, plot_file -> tuple(meta, processed_file) }
-
-        // ch_combined_phidra = COMBINE_PHIDRA_TSV.out.combined ?: Channel.empty()
-        // ch_pasv_map = ch_pasv_map ?: Channel.empty()
-
-        // ch_files_to_standardize = ch_combined_phidra
-        //     .mix(ch_pasv_map)
-        //     .map { meta, file -> tuple(meta.id, meta, file) }
-        //     .groupTuple(by: 0)
-        //     .map { id, metas, files ->
-        //         def meta0 = metas[0]
-        //         def files_list = files.flatten().collect { it.toString() }
-        //         tuple(meta0, files_list)
-        //     }
-
-        // STANDARDIZE_OUTPUTS(ch_files_to_standardize)
-
-        // ch_combine_datasets = STANDARDIZE_OUTPUTS.out.standardized
-        //     .map { meta, file -> file.toAbsolutePath() }
-        //     .collect()
+        ch_combine_datasets = APPLY_CRITERIA.out
+            .map { meta, file -> file.toAbsolutePath() }
+            .collect()
         
-        // COMBINE_DATASETS(ch_combine_datasets)
+        COMBINE_DATASETS(ch_combine_datasets)
 
-        // DUPLICATE_HANDLE(STANDARDIZE_OUTPUTS.out)
+        DUPLICATE_HANDLE(APPLY_CRITERIA.out)
 
-        // ch_split_by_genofeature = SPLIT_BY_GENOFEATURE(
-        //     STANDARDIZE_OUTPUTS.out
-        // )
-        // // Barrier token: count() emits only after split channel is fully complete
-        // ch_split_ready = ch_split_by_genofeature.count()
-        // ch_combined_tsv = COMBINE_DATASETS.out.combined
-        //     .combine(ch_split_ready)
-        //     .map { combined_tsv, split_count -> combined_tsv }
+        APPLY_CRITERIA.out.results
+            .map { meta, tsv -> [meta.id, meta, tsv] }
+            .combine(ch_cleaned_fasta, by: 0)
+            .map { id, meta, tsv, fasta -> tuple(meta, tsv, fasta) }
+            | SPLIT_BY_GENOFEATURE
+
+        // Barrier token: count() emits only after split channel is fully complete
+        ch_split_ready = SPLIT_BY_GENOFEATURE.out.count()
+        ch_combined_tsv = COMBINE_DATASETS.out.combined
+            .combine(ch_split_ready)
+            .map { combined_tsv, split_count -> combined_tsv }
   
-    // emit:
-    //     ch_combined_tsv
+    emit:
+        ch_combined_tsv
 }
 
 
