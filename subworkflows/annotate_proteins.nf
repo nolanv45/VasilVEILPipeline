@@ -28,10 +28,10 @@ process PHIDRA {
 
     output:
         tuple val(meta), 
-              path("${meta.protein}_validated_full_proteins.fa"), 
-              path("${meta.protein}_pfam_validated_report.tsv"),
-              path("${meta.protein}_unvalidated_full_proteins.fa"), 
-              path("${meta.protein}_pfam_unvalidated_report.tsv"),
+              path("${meta.protein}/${meta.protein}_validated_full_proteins.fa"), 
+              path("${meta.protein}/${meta.protein}_pfam_validated_report.tsv"),
+              path("${meta.protein}/${meta.protein}_unvalidated_full_proteins.fa"), 
+              path("${meta.protein}/${meta.protein}_pfam_unvalidated_report.tsv"),
               path("*/mmseqs/initial/hits.tsv"),
               path("*/mmseqs/recursive/hits.tsv"),
               emit: results
@@ -57,13 +57,13 @@ process PHIDRA {
     fi
 
     cp ${meta.protein}/final_results/validated_ida_pfams/full_proteins.fa \
-    ${meta.protein}_validated_full_proteins.fa
+    ${meta.protein}/${meta.protein}_validated_full_proteins.fa
     cp ${meta.protein}/final_results/validated_ida_pfams/pfam_validated_merged_report.tsv \
-    ${meta.protein}_pfam_validated_report.tsv
+    ${meta.protein}/${meta.protein}_pfam_validated_report.tsv
     cp ${meta.protein}/final_results/unvalidated_ida_pfams/full_proteins.fa \
-    ${meta.protein}_unvalidated_full_proteins.fa
+    ${meta.protein}/${meta.protein}_unvalidated_full_proteins.fa
     cp ${meta.protein}/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv \
-    ${meta.protein}_pfam_unvalidated_report.tsv
+    ${meta.protein}/${meta.protein}_pfam_unvalidated_report.tsv
 
     """
 }
@@ -72,8 +72,6 @@ process CRITERIA_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
-        mode: 'copy'
     
     input:
         // Changed path to val to allow safe passing of empty lists/placeholders
@@ -629,103 +627,9 @@ plt.close()
 }
 
 
-process STANDARDIZE_OUTPUTS {
-    tag "${meta.id}"
-
-    container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}", 
-        mode: 'copy',
-        pattern: "*.tsv"
-
-    input:
-    tuple val(meta), path(tsv_files)
-
-    output:
-    tuple val(meta), path("${meta.id}_combined_results.tsv"), emit: standardized
-
-    script:
-    """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
-    import glob
-    import sys
-    import json
-
-    orf_coord_map = json.loads('${groovy.json.JsonOutput.toJson(params.orf_coord_fields ?: [:])}')
-    meta_dataset = "${meta.id}"
-
-    def get_drop(dataset):
-        raw = orf_coord_map.get(dataset)
-        if raw is None:
-            raw = orf_coord_map.get(dataset.upper())
-        try:
-            return int(raw)
-        except Exception:
-            return int(orf_coord_default)
-    
-
-    required_columns = ['contig_id', 'orf_id', 'identified', 'genofeature', 'protein', 'dataset']
-    dfs = []
-
-    files = sorted(glob.glob('*.tsv'))
-    print("DEBUG: staged tsv files:", files, file=sys.stderr)
-
-    for tsv_file in files:
-        print(f"DEBUG: reading {tsv_file}", file=sys.stderr)
-        try:
-            df = pd.read_csv(tsv_file, sep='\\t', dtype=str, keep_default_na=False)
-        except Exception as e:
-            print(f"ERROR reading {tsv_file}: {e}", file=sys.stderr)
-            continue
-
-        cols = set(df.columns.str.lower())
-        # PASV detection
-
-        if 'name' in df.columns and 'signature' in df.columns:
-            protein = os.path.basename(tsv_file).split('_')[0]
-            standardized = pd.DataFrame({
-                'contig_id': df['name'].apply(lambda x: '_'.join(str(x).split('_')[:get_drop(meta_dataset)])),
-                'orf_id': df['name'],
-                'identified': 'PASV',
-                'genofeature': df['signature'],
-                'protein': protein,
-                'dataset': "${meta.id}"
-            })
-            dfs.append(standardized)
-
-        elif 'contig_id' in df.columns or 'genome_id' in df.columns:
-            if 'genome_id' in df.columns and 'contig_id' not in df.columns:
-                df = df.rename(columns={'genome_id':'contig_id'})
-            if 'dataset' not in df.columns:
-                df['dataset'] = "${meta.id}"
-            dfs.append(df)
-
-        else:
-            print(f"WARNING: Unrecognized format for {tsv_file}: columns={list(df.columns)}", file=sys.stderr)
-            continue
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True, sort=False)
-        for col in required_columns:
-            if col not in combined.columns:
-                combined[col] = None
-        combined = combined[required_columns]
-        combined.to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-        print(f"WROTE {len(combined)} rows to ${meta.id}_combined_results.tsv", file=sys.stderr)
-    else:
-        print("No data to combine, writing empty file", file=sys.stderr)
-        pd.DataFrame(columns=required_columns).to_csv("${meta.id}_combined_results.tsv", sep='\\t', index=False)
-    """
-}
-
-
 process TOP_HIT_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis/phidra_annotation/top_hit_annotation/${meta.protein}", 
-        mode: 'copy',
-        pattern: "${meta.protein}_annotated_hits.tsv"
 
     input:
     tuple val(meta), 
@@ -734,7 +638,7 @@ process TOP_HIT_ANNOTATION {
           path(recursive_search, stageAs: 'recursive_search.tsv')
 
     output:
-    tuple val(meta), file("${meta.protein}_annotation_criteria.tsv"), emit: results
+    tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
 
     script:
     """
@@ -753,8 +657,27 @@ def build_hit_map(filepath):
         for _, row in hits.iterrows()
     }
 
-initial_map   = build_hit_map("initial_search.tsv")
-recursive_map = build_hit_map("recursive_search.tsv")
+def build_raw_map(filepath):
+    if not os.path.exists(filepath):
+        return {}
+    hits = pd.read_csv(filepath, sep="\\t", dtype=str, keep_default_na=False)
+    return {
+        row.iloc[0]: row.iloc[1]
+        for _, row in hits.iterrows()
+    }
+
+# initial: query_id -> genofeature (first part of target_id)
+initial_map = build_hit_map("initial_search.tsv")
+
+# recursive raw: query_id -> full target_id (which is a query_id from initial)
+recursive_raw = build_raw_map("recursive_search.tsv")
+
+# recursive final: query_id -> genofeature (via initial lookup)
+recursive_map = {
+    query_id: initial_map[target_id]
+    for query_id, target_id in recursive_raw.items()
+    if target_id in initial_map
+}
 
 mask = df["Protein"] == "${meta.protein}"
 
@@ -968,6 +891,57 @@ process PHIDRA_ONLY {
 }
 
 
+process APPLY_CRITERIA {
+    tag "${meta.id}"
+    container "containers/phidra/phidra.sif"
+    label 'standard'
+    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
+        mode: 'copy'
+
+    input:
+        tuple val(meta), path(criteria_tsv)
+
+    output:
+        tuple val(meta), path("${meta.id}_genofeatures.tsv"), emit: results
+
+    script:
+    def pasv_proteins_json = groovy.json.JsonOutput.toJson(params.pasv_proteins ?: [])
+    def orf_drop = params.orf_coord_fields[meta.id] ?: -1
+
+    """
+#!/usr/bin/env python3
+import json
+import pandas as pd
+
+df = pd.read_csv("${criteria_tsv}", sep="\\t", dtype=str, keep_default_na=False)
+
+pasv_proteins = set(json.loads('${pasv_proteins_json}'))
+orf_drop = ${orf_drop}  # negative index, e.g. -3 means drop last 3 fields
+
+# Rule 1: filter out anything PHIDRA == No
+df = df[df["PHIDRA"] == "Yes"]
+
+# Rule 2: for PASV proteins, filter out PASV == No
+pasv_mask = df["Protein"].isin(pasv_proteins)
+df = df[~pasv_mask | (df["PASV"] == "Yes")]
+
+# Parse contig_id and orf_id from Query_ID using orf_coord_fields
+df["orf_id"] = df["Query_ID"]
+df["contig_id"] = df["Query_ID"].apply(
+    lambda x: "_".join(x.split("_")[:orf_drop])
+)
+
+# Output with required columns
+df[["contig_id", "orf_id", "Genofeature", "Protein", "Dataset"]].rename(columns={
+    "Protein":    "protein",
+    "Dataset":    "dataset",
+    "Genofeature": "genofeature"
+}).to_csv("${meta.id}_genofeatures.tsv", sep="\\t", index=False)
+    """
+}
+
+
+
 workflow ANNOTATE_PROTEINS {
     take:
         ch_dataset
@@ -1117,6 +1091,9 @@ workflow ANNOTATE_PROTEINS {
             .map { id, tsvs -> [ [id: id], tsvs.flatten() ] }
             | MERGE_TSV
 
+
+        // APPLIES RULESET BELOW
+        MERGE_TSV.out.results | APPLY_CRITERIA
 
 
         // ch_pasv_post_input = PASV.out.results
