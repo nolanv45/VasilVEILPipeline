@@ -20,7 +20,7 @@ process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/01_phidra",
+    publishDir "${params.outdir}/01_phidra/${meta.id}",
         mode: 'copy'
 
     input:
@@ -166,7 +166,7 @@ process PASV {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/02_pasv/${meta.protein}",
+    publishDir "${params.outdir}/02_pasv/${meta.id}/${meta.protein}",
         mode: 'copy',
         pattern: "pasv/output/${meta.protein}_putative.pasv_signatures.tsv",
         saveAs: { filename -> file(filename).name }
@@ -255,11 +255,11 @@ df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
 process ANALYZE_AND_PLOT {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}", 
+    publishDir "${params.outdir}/03_annotation_analysis", 
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_annotation_analysis/phidra_annotation/${meta.protein}/${filename}"
-            else if (filename.endsWith('.png')) "03_annotation_analysis/phidra_annotation/${meta.protein}/${filename}"
+            if (filename.endsWith('.tsv')) "phidra_annotation/${meta.id}/${meta.protein}/${filename}"
+            else if (filename.endsWith('.png')) "phidra_annotation/${meta.id}/${meta.protein}/${filename}"
             else null
         }
 
@@ -404,12 +404,12 @@ plt.close()
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}",
+    publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
         pattern: "*.{tsv,png}",
         saveAs: { filename ->
-            if (filename.endsWith('.tsv')) "03_annotation_analysis/pasv_annotation/${meta.protein}/${filename}"
-            else if (filename.endsWith('.png')) "03_annotation_analysis/pasv_annotation/${meta.protein}/${filename}"
+            if (filename.endsWith('.tsv')) "pasv_annotation/${meta.id}/${meta.protein}/${filename}"
+            else if (filename.endsWith('.png')) "pasv_annotation/${meta.id}/${meta.protein}/${filename}"
             else null
         }
 
@@ -667,7 +667,7 @@ process DUPLICATE_HANDLE {
     tag "${meta.id}"
     debug true
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}", 
+    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
 
@@ -704,7 +704,7 @@ process DUPLICATE_HANDLE {
 process SPLIT_BY_GENOFEATURE {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
+    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
         mode: 'copy'
 
     input:
@@ -803,7 +803,7 @@ process MERGE_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
+    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
         mode: 'copy'
 
     input:
@@ -865,7 +865,7 @@ process APPLY_CRITERIA {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label 'standard'
-    publishDir "${params.outdir}/${meta.id}/03_annotation_analysis",
+    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
         mode: 'copy'
 
     input:

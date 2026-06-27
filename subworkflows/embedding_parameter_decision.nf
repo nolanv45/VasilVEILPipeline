@@ -68,7 +68,7 @@ process EMBEDDINGS {
 
 
 process HDBSCAN {
-    publishDir "${params.outdir}/hdbscan",
+    publishDir "${params.outdir}/04_parameter_selection/hdbscan",
         mode: 'copy',
         saveAs: { filename ->
             if (filename.startsWith("plots/tiled_image_md")) filename
@@ -79,6 +79,7 @@ process HDBSCAN {
     container "containers/umap/umap.sif"
     
     input:
+        path embeddings_dirs
         path coordinates_dir  // Directory containing the pre-generated coordinates
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
@@ -100,6 +101,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import hdbscan
 import random 
+import torch
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 Image.MAX_IMAGE_PIXELS = None 
 
@@ -124,81 +127,98 @@ def load_and_resize_image(filepath, max_width=2400):
         print(f"Error loading image {filepath}: {e}")
         return None
 
-def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output):
+def find_pt_files(base_dir):
+    pt_files = []
+    for root, _, files in os.walk(base_dir):
+        if Path(root).name.startswith('batch_'):
+            for file in files:
+                if file.endswith('.pt'):
+                    pt_files.append(os.path.join(root, file))
+    return pt_files
+
+def load_raw_embeddings(embeddings_dirs_str):
+    embeddings = []
+    embedding_ids = []
+    base_dirs = embeddings_dirs_str.split() if isinstance(embeddings_dirs_str, str) else embeddings_dirs_str
+    pt_files = []
+    for base_dir in base_dirs:
+        pt_files.extend(find_pt_files(base_dir))
+    print(f"Found {len(pt_files)} .pt files")
+    for file_path in pt_files:
+        try:
+            data = torch.load(file_path, map_location='cpu')
+            emb = data["mean_representations"][36].numpy()
+            eid = data.get("label")
+            if emb is not None and eid is not None:
+                embeddings.append(emb)
+                embedding_ids.append(eid)
+        except Exception as e:
+            print(f"Warning: could not load {file_path}: {e}")
+    return np.stack(embeddings), embedding_ids
+
+def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output, raw_embeddings, raw_embedding_ids):
     try:
         md_int = int(md * 10)
+
+        # Load 2D coords for plotting only
         coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
         coord_df = pd.read_csv(coord_file, sep='\t')
-        embedding_ids = coord_df['embedding_id'].tolist()
+        embedding_ids_2d = coord_df['embedding_id'].tolist()
         embedding_2d = coord_df[['x', 'y']].values
 
-        print(f"Loaded coordinates from {coord_file}")
-        print(f"Shape: {embedding_2d.shape}, IDs: {len(embedding_ids)}")
+        # Align raw embeddings to the order of the 2D coordinate IDs
+        id_to_raw = {eid: emb for eid, emb in zip(raw_embedding_ids, raw_embeddings)}
+        aligned_embeddings = np.stack([id_to_raw[eid] for eid in embedding_ids_2d if eid in id_to_raw])
+        aligned_ids = [eid for eid in embedding_ids_2d if eid in id_to_raw]
+        aligned_2d = np.stack([embedding_2d[i] for i, eid in enumerate(embedding_ids_2d) if eid in id_to_raw])
+
+        print(f"Clustering on {aligned_embeddings.shape[1]}-dimensional embeddings, plotting on 2D coords")
+
+        # Cluster on HIGH-DIMENSIONAL embeddings
+        labels = hdbscan.HDBSCAN(min_samples=2, min_cluster_size=mc).fit_predict(aligned_embeddings)
+        clustered = (labels >= 0)
 
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
 
-        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
-      
-        labels = hdbscan.HDBSCAN(min_samples=2, min_cluster_size=mc).fit_predict(embedding_2d)
-        clustered = (labels >= 0)
-
         cluster_df = pd.DataFrame({
-            'embedding_id': embedding_ids,
+            'embedding_id': aligned_ids,
             'cluster_label': labels,
-            #'genofeature': [id_to_genofeature.get(eid, "unknown") for eid in embedding_ids]
-            'genofeature': [module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0] 
-                if eid in module_df["normalized_orf_id"].values else "unknown" 
-                for eid in embedding_ids]
+            'genofeature': [module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0]
+                if eid in module_df["normalized_orf_id"].values else "unknown"
+                for eid in aligned_ids]
         })
 
         cluster_output_path = os.path.join(iteration_output,
-                                         f"hdbscan_nn{nn}_md{md_int}_minclust{mc}_clusters.csv")
+                                           f"hdbscan_nn{nn}_md{md_int}_minclust{mc}_clusters.csv")
         cluster_df.to_csv(cluster_output_path, index=False)
-        print(f"Cluster membership saved: {cluster_output_path}")
 
-        # Create plot
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Plot using 2D coords but colour by high-dim cluster labels
+        fig, ax = plt.subplots(figsize=(10, 10))
+        scatter = ax.scatter(aligned_2d[clustered, 0], aligned_2d[clustered, 1],
+                             c=labels[clustered], s=10, alpha=0.7, cmap="Spectral")
+        ax.scatter(aligned_2d[~clustered, 0], aligned_2d[~clustered, 1],
+                   color="gray", s=10, alpha=0.5, label="not clustered")
 
-        # Plot clustered points
-        scatter = ax.scatter(embedding_2d[clustered, 0], embedding_2d[clustered, 1],
-                           c=labels[clustered], s=10, alpha=0.7, cmap="Spectral")
-
-        # Plot unclustered points
-        ax.scatter(embedding_2d[~clustered, 0], embedding_2d[~clustered, 1],
-                  color="gray", s=10, alpha=0.5, label="not clustered")
-
-        # Label cluster centers
         unique_labels = np.unique(labels[labels >= 0])
         for cluster in unique_labels:
-            cluster_points = embedding_2d[labels == cluster]
-            center_x, center_y = cluster_points[:, 0].mean(), cluster_points[:, 1].mean()
-            plt.text(center_x, center_y, str(cluster),
-                    fontsize=10, weight='regular',
-                    ha='center', va='center')
+            cluster_points = aligned_2d[labels == cluster]
+            cx, cy = cluster_points[:, 0].mean(), cluster_points[:, 1].mean()
+            plt.text(cx, cy, str(cluster), fontsize=10, ha='center', va='center')
 
-        # Configure plot
         ax.set_xticks([])
         ax.set_yticks([])
         plt.grid(False)
-
         plt.title(f"UMAP (nn={nn}, md={md}) with HDBSCAN (minclust={mc})")
         plt.colorbar(scatter, label="Cluster Labels")
-        
-        # Save plot
         plt.tight_layout()
         plt.savefig(output_path, dpi=600, bbox_inches="tight")
-        print(f"Saved plot: {output_path}")
-        
         plt.close()
         return True
 
     except Exception as e:
         print(f"Error processing plot: {e}")
-        print("Debug info - metadata columns:", metadata_df.columns.tolist())
         return False
+
 
 # Main execution
 print("Loading metadata...")
@@ -212,25 +232,19 @@ os.makedirs("clusters_csv", exist_ok=True)
 
 # Copy input UMAP plots to working directory
 os.system("cp ${plots} plots/")
+# Load raw embeddings once before the loop
+raw_embeddings, raw_embedding_ids = load_raw_embeddings("${embeddings_dirs}")
 
-# Generate HDBSCAN plots for each UMAP plot
 for umap_file in os.listdir("plots"):
     if umap_file.startswith("umap_nn"):
-        # Extract parameters from filename
         parts = umap_file.replace(".png", "").split("_")
         nn = int(parts[1].replace("nn", ""))
         md = float(parts[2].replace("md", "")) / 10
         md_int = int(md * 10)
-        
-        # Load corresponding coordinates
-        # coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
-        # coord_df = pd.read_csv(coord_file, sep='\t')
-        
-        # Generate HDBSCAN plots with different min_cluster_size values
         for mc in ${params.mc}:
             output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
-            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv")
-
+            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv",
+                              raw_embeddings, raw_embedding_ids)
 
 from PIL import Image
 import math
@@ -399,7 +413,7 @@ tile_images("plots", "plots/tiled_image")
 
 
 process UMAP_PROJECTION {
-    publishDir "${params.outdir}/umap",
+    publishDir "${params.outdir}/04_parameter_selection/umap",
         mode: 'copy',
         saveAs: { filename ->
             if (filename.endsWith("tiled_image.png")) filename
@@ -452,10 +466,6 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
         
         # Prepare metadata mappings
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
-        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 
         # Assign colors and markers
         colors = []
@@ -490,7 +500,7 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
             print("No connections file found")
 
         # Create plot
-        fig, ax = plt.subplots(figsize=(10, 7))
+        fig, ax = plt.subplots(figsize=(10, 10))
 
         # Draw connections first (background)
         if len(connections) > 0:
@@ -751,7 +761,7 @@ tile_images("plots", "plots/tiled_image.png", legend_handles)
 }
 
 process GENERATE_COORDINATES {
-    publishDir "${params.outdir}",
+    publishDir "${params.outdir}/04_parameter_selection/coordinates",
         mode: 'copy'
         
     label 'gpu'  
@@ -933,7 +943,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
         .mix(ch_embedding_targets_from_fs)
         .unique()
         .map { dataset_id, protein_name ->
-            def protein_dir = file("${params.outdir}/${dataset_id}/03_annotation_analysis/protein_genofeature_fastas/${protein_name}")
+            def protein_dir = file("${params.outdir}/03_annotation_analysis/${dataset_id}/protein_genofeature_fastas/${protein_name}")
             def meta = [id: dataset_id, protein: protein_name]
             tuple(meta, protein_dir)
         }
@@ -954,6 +964,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
     )
 
     ch_hbd = HDBSCAN(
+        ch_embeddings.collect(),
         ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,

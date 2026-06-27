@@ -16,7 +16,7 @@ workflow {
         .set { ch_datasets }
 
     def anyMissing = params.datasets.any { id, path ->
-        def emb_dir = file("${params.outdir}/${id}/03_annotation_analysis/protein_genofeature_fastas")
+        def emb_dir = file("${params.outdir}/03_annotation_analysis/${id}/protein_genofeature_fastas")
         !emb_dir.exists()
     }
     println "anyMissing = ${anyMissing}"
