@@ -1,71 +1,133 @@
 nextflow.enable.dsl=2
 
+process EMBEDDING_PLAN {
+
+    cpus 1
+    memory '2 GB'
+
+    input:
+    path(combined_tsv)
+
+    output:
+    path("**/*.fasta", optional: true)
+
+    script:
+    def datasetsJson = groovy.json.JsonOutput.toJson(params.datasets)
+    """
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    python3 - <<'PY'
+import json
+import pandas as pd
+from pathlib import Path
+
+combined_tsv = "${combined_tsv}"
+datasets = json.loads('''${datasetsJson}''')
+
+df = pd.read_csv(combined_tsv, sep='\t', dtype=str, keep_default_na=False)
+
+for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein', 'genofeature'], dropna=False):
+    dataset = str(dataset).strip()
+    protein = str(protein).strip()
+    genofeature = str(genofeature).strip()
+    if not dataset or not protein or not genofeature:
+        continue
+
+    fasta_path = Path(datasets.get(dataset, ''))
+    if not str(fasta_path):
+        raise KeyError(f"No fasta configured for dataset {dataset}")
+    if not fasta_path.exists():
+        raise FileNotFoundError(f"Configured fasta does not exist for {dataset}: {fasta_path}")
+
+    output_root = Path("${params.outdir}") / "embeddings" / dataset / protein / genofeature
+
+    expected_ids = {
+        str(orf_id).strip()
+        for orf_id in group_df.get('orf_id', pd.Series(dtype=str)).tolist()
+        if str(orf_id).strip()
+    }
+
+    existing_ids = {
+        pt.stem
+        for pt in output_root.rglob('*.pt')
+    } if output_root.exists() else set()
+
+    missing_ids = sorted(expected_ids - existing_ids)
+
+    if not missing_ids:
+        continue
+
+    missing_set = set(missing_ids)
+    out_fasta = Path(dataset) / protein / genofeature / f"{dataset}_{protein}_{genofeature}.fasta"
+    out_fasta.parent.mkdir(parents=True, exist_ok=True)
+
+    with fasta_path.open('r', encoding='utf-8') as fasta_handle, out_fasta.open('w', encoding='utf-8') as out_handle:
+        header = None
+        sequence_lines = []
+
+        def flush_record(record_header, record_lines):
+            if record_header is None:
+                return
+            record_id = record_header.split()[0]
+            if record_id in missing_set:
+                out_handle.write(f">{record_header}\\n")
+                for seq_line in record_lines:
+                    out_handle.write(seq_line)
+                    if not seq_line.endswith('\\n'):
+                        out_handle.write('\\n')
+
+        for raw_line in fasta_handle:
+            if raw_line.startswith('>'):
+                flush_record(header, sequence_lines)
+                header = raw_line[1:].strip()
+                sequence_lines = []
+            else:
+                sequence_lines.append(raw_line)
+
+        flush_record(header, sequence_lines)
+PY
+    """
+}
+
+
+
 process EMBEDDINGS {
     publishDir "${params.outdir}",
         mode: 'copy'
         
     label 'gpu'  
     container "containers/umap/umap.sif"
-    memory { 50.GB }
     
     input:
-        tuple val(meta), path(protein_dir)
+        tuple val(dataset), val(protein), val(genofeature), path(fasta)
         path model_folder
         
     output:
-        path "embeddings/${meta.id}/${meta.protein}", emit: embeddings_dirs
+        path "embeddings/${dataset}/${protein}/${genofeature}", emit: embeddings_dirs
         
     script:
     """
-    #!/usr/bin/env bash
     set -euo pipefail
-    
-    mkdir -p "embeddings/${meta.id}/${meta.protein}"
-    echo "dataset: ${meta.id}"
-    echo "protein: ${meta.protein}"
-    echo "protein_dir: ${protein_dir}"
-    echo "model_folder: ${model_folder}"
 
-    for genofeature_dir in "${protein_dir}"/*; do
-        if [ -d "\$genofeature_dir" ]; then
-            genofeature=\$(basename "\$genofeature_dir")
-            echo "Processing genofeature directory: \$genofeature"
-            output_dir="embeddings/${meta.id}/${meta.protein}/\$genofeature"
-            mkdir -p "\$output_dir"
+    out_dir="embeddings/${dataset}/${protein}/${genofeature}"
+    mkdir -p "\$out_dir"
 
-            for fasta in "\$genofeature_dir"/*.fasta; do
-                if [ -f "\$fasta" ]; then
-                    fasta_base=\$(basename "\$fasta" .fasta)
-                    existing_base_dir="${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature"
-                    expected_count=\$(grep -c '^>' "\$fasta" || true)
-                    existing_count=0
-                    if [ -d "\$existing_base_dir" ]; then
-                        existing_count=\$(find "\$existing_base_dir" -type f -path '*/batch_*/*.pt' 2>/dev/null | wc -l)
-                    fi
+    python3 ${model_folder}/extract.py \
+        ${model_folder}/esm2_t36_3B_UR50D.pt \
+        "${fasta}" \
+        "\$out_dir" \
+        --repr_layers 36 \
+        --include mean
 
-                    # Reuse only when the existing embedding set appears complete for this fasta.
-                    if [ "\$expected_count" -gt 0 ] && [ "\$existing_count" -ge "\$expected_count" ]; then
-                        echo "Using existing embeddings for \$fasta_base"
-                        cp -r "${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature" "embeddings/${meta.id}/${meta.protein}/"
-                    else
-                        if [ "\$existing_count" -gt 0 ]; then
-                            echo "Found incomplete embeddings for \$fasta_base (have \$existing_count, expected \$expected_count); regenerating"
-                        fi
-                        echo "Generating embeddings for \$fasta_base"
-                        python3 ${model_folder}/extract.py \\
-                            ${model_folder}/esm2_t36_3B_UR50D.pt \\
-                            "\$fasta" \\
-                            "\$output_dir" \\
-                            --repr_layers 36 \\
-                            --include mean || exit 1
-                    fi
-                fi
-            done
-        fi
+    for batch_dir in "\$out_dir"/batch_*; do
+        [ -d "\$batch_dir" ] || continue
+        mv "\$batch_dir"/*.pt "\$out_dir"/
+        rmdir "\$batch_dir" || true
     done
+
     """
 }
-
 
 process HDBSCAN {
     publishDir "${params.outdir}/04_parameter_selection/hdbscan",
@@ -130,10 +192,9 @@ def load_and_resize_image(filepath, max_width=2400):
 def find_pt_files(base_dir):
     pt_files = []
     for root, _, files in os.walk(base_dir):
-        if Path(root).name.startswith('batch_'):
-            for file in files:
-                if file.endswith('.pt'):
-                    pt_files.append(os.path.join(root, file))
+        for file in files:
+            if file.endswith('.pt'):
+                pt_files.append(os.path.join(root, file))
     return pt_files
 
 def load_raw_embeddings(embeddings_dirs_str):
@@ -161,7 +222,7 @@ def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration
         md_int = int(md * 10)
 
         # Load 2D coords for plotting only
-        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+        coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
         coord_df = pd.read_csv(coord_file, sep='\t')
         embedding_ids_2d = coord_df['embedding_id'].tolist()
         embedding_2d = coord_df[['x', 'y']].values
@@ -416,10 +477,12 @@ process UMAP_PROJECTION {
     publishDir "${params.outdir}/04_parameter_selection/umap",
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith("tiled_image.png")) filename
+            if (filename.endsWith("tiled_image.png")) {
+                return "umap_parameter_tiled.png"
+            }
             else null
         }
-        
+
     container "containers/umap/umap.sif"
     
     input:
@@ -452,7 +515,7 @@ os.makedirs("plots", exist_ok=True)
 def plot_umap(module_df, metadata_df, nn, md, output_file):
     # Load pre-generated UMAP coordinates and IDs
     md_int = int(md * 10)
-    coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+    coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
     conns_file = os.path.join("${coordinates_dir}", "connections.tsv")
 
     try:
@@ -768,15 +831,14 @@ process GENERATE_COORDINATES {
     container "containers/umap/umap.sif"
     
     memory { 50.GB }
-    
+
     input:
-        val embeddings_dirs
+        path embeddings_dirs
         
     output:
-        path "first_coordinates", emit: coordinates_files
+        path "coords", emit: coordinates_files
         
     script:
-    def embeddingsJson = groovy.json.JsonOutput.toJson(embeddings_dirs.collect { embDir -> embDir.toString() })
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -785,11 +847,6 @@ process GENERATE_COORDINATES {
     mkdir -p \$PWD/.numba_cache
     chmod 1777 \$PWD/.numba_cache || true
     export NUMBA_CACHE_DIR=\$PWD/.numba_cache
-
-    # write embeddings list (safe from shell expansion)
-    cat > embeddings_list.json <<'JSON'
-${embeddingsJson}
-JSON
 
     # Run the Python script using the conda environment's python binary
     /opt/conda/envs/umap/bin/python - <<'PY'
@@ -803,7 +860,7 @@ import json
 from pathlib import Path
 
 # Create output directories
-os.makedirs("first_coordinates/coords", exist_ok=True)
+os.makedirs("coords", exist_ok=True)
 
 # SET SEED for reproducibility
 os.environ['PYTHONHASHSEED'] = '42'
@@ -827,23 +884,22 @@ def load_embedding(file_path):
 def find_pt_files(base_dir):
     pt_files = []
     for root, _, files in os.walk(base_dir):
-        if Path(root).name.startswith('batch_'):
-            for file in files:
-                if file.endswith('.pt'):
-                    pt_files.append(os.path.join(root, file))
+        for file in files:
+            if file.endswith('.pt'):
+                pt_files.append(os.path.join(root, file))
     return pt_files
 
 # Load embeddings
 embeddings = []
 embedding_ids = []
 
-import json as _json
-embedding_dirs = _json.load(open('embeddings_list.json'))
+base_dirs = "${embeddings_dirs}".split()
 
 # Find all .pt files
 pt_files = []
-for embedding_dir in embedding_dirs:
-    pt_files.extend(find_pt_files(embedding_dir))
+for base_dir in base_dirs:
+    if os.path.isdir(base_dir):
+        pt_files.extend(find_pt_files(base_dir))
 print(f"Found {len(pt_files)} .pt files")
 
 # Process each .pt file
@@ -883,14 +939,14 @@ if len(embeddings) > 0:
             
             # Save outputs with parameter-specific names
             md_int = int(md * 10)
-            coord_file = f"first_coordinates/coords/coordinates_nn{nn}_md{md_int}.tsv"
+            coord_file = f"coords/coordinates_nn{nn}_md{md_int}.tsv"
 
             coord_df = pd.DataFrame({
                 'embedding_id': embedding_ids,
                 'x': coordinates[:, 0],
                 'y': coordinates[:, 1]
             })
-            coord_df.to_csv(coord_file, sep='\t', index=False)
+            coord_df.to_csv(coord_file, sep='\\t', index=False)
             
     connections = []
     for contig_id, indices in groups.items():
@@ -902,8 +958,8 @@ if len(embeddings) > 0:
                     connections.append([id1, id2])
     # Save connections as TSV
     connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
-    connections_file = f"first_coordinates/connections.tsv"
-    connections_df.to_csv(connections_file, sep='\t', index=False)
+    connections_file = f"coords/connections.tsv"
+    connections_df.to_csv(connections_file, sep='\\t', index=False)
 
 PY
     """
@@ -918,43 +974,27 @@ workflow EMBEDDING_PARAMETER_DECISION {
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-    ch_embedding_targets_from_tsv = ch_combined_tsv
-        .splitCsv(header: true, sep: '\t')
-        .map { row ->
-            def dataset_id = row.dataset?.toString()?.trim()
-            def protein_name = row.protein?.toString()?.trim()
-            if (!dataset_id || !protein_name) {
-                throw new IllegalStateException("combined_datasets.tsv must contain non-empty 'dataset' and 'protein' columns for embeddings")
-            }
-            tuple(dataset_id, protein_name)
-        }
-        .unique()
-
-    ch_embedding_targets_from_fs = Channel
-        .fromPath("${params.outdir}/03_annotation_analysis/*/protein_genofeature_fastas/*", type: 'dir')
-        .map { protein_dir ->
-            def protein_name = protein_dir.getName()
-            def dataset_id = protein_dir.getParent().getParent().getName()
-            tuple(dataset_id, protein_name)
-        }
-        .unique()
-
-    ch_embedding_targets = ch_embedding_targets_from_tsv
-        .mix(ch_embedding_targets_from_fs)
-        .unique()
-        .map { dataset_id, protein_name ->
-            def protein_dir = file("${params.outdir}/03_annotation_analysis/${dataset_id}/protein_genofeature_fastas/${protein_name}")
-            def meta = [id: dataset_id, protein: protein_name]
-            tuple(meta, protein_dir)
-        }
+    ch_embedding_plan = EMBEDDING_PLAN(ch_combined_tsv)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_targets,
+        ch_embedding_plan.flatten().map { fasta ->
+            def genofeature = fasta.parent.name
+            def protein = fasta.parent.parent.name
+            def dataset = fasta.parent.parent.parent.name
+            tuple(dataset, protein, genofeature, fasta)
+        },
         "${baseDir}/tools/"
     )
 
+    ch_existing_embedding_dirs = Channel
+        .fromPath("${params.outdir}/embeddings/*", type: 'dir')
+
+    ch_embedding_dirs = ch_existing_embedding_dirs
+        .mix(ch_embeddings.embeddings_dirs)
+        .unique()
+
     ch_coordinates = GENERATE_COORDINATES(
-        ch_embeddings.collect()
+        ch_embedding_dirs.collect()
     )
 
     ch_umap = UMAP_PROJECTION(
@@ -964,7 +1004,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
     )
 
     ch_hbd = HDBSCAN(
-        ch_embeddings.collect(),
+        ch_embedding_dirs.collect(),
         ch_coordinates,
         ch_filtered_tsv,
         ch_metadata,

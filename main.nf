@@ -15,19 +15,16 @@ workflow {
         }
         .set { ch_datasets }
 
-    def anyMissing = params.datasets.any { id, path ->
-        def emb_dir = file("${params.outdir}/03_annotation_analysis/${id}/protein_genofeature_fastas")
-        !emb_dir.exists()
+    def combinedDatasetsExists = file("${params.outdir}/combined_datasets.tsv").exists()
+    println "combinedDatasetsExists = ${combinedDatasetsExists}"
+    if ( combinedDatasetsExists ) {
+        EMBEDDING_PARAMETER_DECISION(Channel.fromPath("${params.outdir}/combined_datasets.tsv"))
     }
-    println "anyMissing = ${anyMissing}"
-    if ( anyMissing ) {
+    else {
         // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
         def firstRes = ANNOTATE_PROTEINS(ch_datasets)
 
         EMBEDDING_PARAMETER_DECISION(firstRes.ch_combined_tsv)
-    }
-    else {
-        EMBEDDING_PARAMETER_DECISION(Channel.fromPath("${params.outdir}/combined_datasets.tsv"))
     }
   }
   if (params.final_analysis) {
