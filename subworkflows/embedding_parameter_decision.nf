@@ -2,8 +2,7 @@ nextflow.enable.dsl=2
 
 process EMBEDDING_PLAN {
 
-    cpus 1
-    memory '2 GB'
+    label "process_single"
 
     input:
     path(combined_tsv)
@@ -96,7 +95,7 @@ process EMBEDDINGS {
     publishDir "${params.outdir}",
         mode: 'copy'
         
-    label 'gpu'  
+    label 'process_gpu'  
     container "containers/umap/umap.sif"
     
     input:
@@ -137,7 +136,8 @@ process HDBSCAN {
             else if (filename.startsWith("clusters_csv/")) filename
             else null
         }
-        
+
+    label "process_medium"
     container "containers/umap/umap.sif"
     
     input:
@@ -482,7 +482,7 @@ process UMAP_PROJECTION {
             }
             else null
         }
-
+    label "process_medium"
     container "containers/umap/umap.sif"
     
     input:
@@ -827,10 +827,8 @@ process GENERATE_COORDINATES {
     publishDir "${params.outdir}/04_parameter_selection/coordinates",
         mode: 'copy'
         
-    label 'gpu'  
+    label "process_high_memory"
     container "containers/umap/umap.sif"
-    
-    memory { 50.GB }
 
     input:
         path embeddings_dirs

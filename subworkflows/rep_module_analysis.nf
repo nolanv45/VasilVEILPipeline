@@ -62,10 +62,9 @@ process GENERATE_COORDINATES_2 {
     def find_pt_files(base_dir):
         pt_files = []
         for root, _, files in os.walk(base_dir):
-            if 'batch_0' in root:
-                for file in files:
-                    if file.endswith('.pt'):
-                        pt_files.append(os.path.join(root, file))
+            for file in files:
+                if file.endswith('.pt'):
+                    pt_files.append(os.path.join(root, file))
         return pt_files
 
     # Load embeddings

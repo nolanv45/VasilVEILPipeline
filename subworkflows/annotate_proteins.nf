@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 process CLEAN_FASTA_HEADERS {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
+    label "process_single"
 
     input:
         tuple val(meta), path(fasta)
@@ -19,7 +20,7 @@ process CLEAN_FASTA_HEADERS {
 process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_medium"
     publishDir "${params.outdir}/01_phidra/${meta.id}",
         mode: 'copy'
 
@@ -71,7 +72,7 @@ process PHIDRA {
 process CRITERIA_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
     
     input:
         // Changed path to val to allow safe passing of empty lists/placeholders
@@ -125,7 +126,7 @@ combined_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
 process DOMAIN_MATCH_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
 
     input:
         tuple val(meta), path(criteria_tsv)
@@ -165,7 +166,7 @@ df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
 process PASV {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_medium"
     publishDir "${params.outdir}/02_pasv/${meta.id}/${meta.protein}",
         mode: 'copy',
         pattern: "pasv/output/${meta.protein}_putative.pasv_signatures.tsv",
@@ -219,7 +220,7 @@ process PASV {
 process PASV_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
 
     input:
         tuple val(meta),
@@ -255,6 +256,7 @@ df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
 process ANALYZE_AND_PLOT {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
+    label "process_single"
     publishDir "${params.outdir}/03_annotation_analysis", 
         mode: 'copy',
         saveAs: { filename ->
@@ -404,6 +406,8 @@ plt.close()
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
+    label "process_single"
+
     publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
         pattern: "*.{tsv,png}",
@@ -600,6 +604,7 @@ plt.close()
 process TOP_HIT_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
+    label "process_single"
 
     input:
     tuple val(meta), 
@@ -667,6 +672,8 @@ process DUPLICATE_HANDLE {
     tag "${meta.id}"
     debug true
     container "containers/phidra/phidra.sif"
+    label "process_single"
+
     publishDir "${params.outdir}/03_annotation_analysis/${meta.id}", 
         mode: 'copy',
         pattern: "*.tsv"
@@ -700,61 +707,9 @@ process DUPLICATE_HANDLE {
 }
 
 
-
-process SPLIT_BY_GENOFEATURE {
-    tag "${meta.id}"
-    container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
-        mode: 'copy'
-
-    input:
-        tuple val(meta), path(filtered_tsv), path(cleaned_fasta)
-
-    output:
-        tuple val(meta), path("protein_genofeature_fastas"), emit: fastas_for_embeddings
-
-    script:
-    """
-    #!/usr/bin/env python3
-    from Bio import SeqIO
-    import pandas as pd
-    import os
-
-    # Create the base output directory
-    os.makedirs("protein_genofeature_fastas", exist_ok=True)
-    df = pd.read_csv("${filtered_tsv}", sep='\\t')
-    seq_dict = SeqIO.to_dict(SeqIO.parse("${cleaned_fasta}", "fasta"))
-
-    # Group by protein and genofeature
-    for protein in df['protein'].unique():
-        protein_df = df[df['protein'] == protein]
-        
-        for genofeature in protein_df['genofeature'].unique():
-            # Create nested directory structure
-            dir_path = os.path.join("protein_genofeature_fastas", protein, genofeature)
-            os.makedirs(dir_path, exist_ok=True)
-            
-            # Filter records for this genofeature
-            genofeature_df = protein_df[protein_df['genofeature'] == genofeature]
-            
-            # Save filtered TSV
-            genofeature_df.to_csv(f"{dir_path}/filtered.tsv", sep='\\t', index=False)
-            
-            # Extract matching sequences
-            matching_seqs = []
-            for orf_id in genofeature_df['orf_id']:
-                if orf_id in seq_dict:
-                    matching_seqs.append(seq_dict[orf_id])
-            
-            # Write matching sequences to FASTA
-            if matching_seqs:
-                SeqIO.write(matching_seqs, f"{dir_path}/{protein}_{genofeature}.fasta", "fasta")
-    """
-}
-
 process COMBINE_DATASETS {
-
     container "containers/phidra/phidra.sif"
+    label "process_single"
     publishDir "${params.outdir}",
         mode: 'copy',
         pattern: "*.tsv"
@@ -763,7 +718,7 @@ process COMBINE_DATASETS {
         path(tsv_files)
 
     output:
-        path "combined_datasets.tsv", emit: combined
+        path "combined_datasets.tsv"
 
     script:
     """
@@ -802,7 +757,7 @@ process COMBINE_DATASETS {
 process MERGE_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
     publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
         mode: 'copy'
 
@@ -846,7 +801,7 @@ base.reset_index().to_csv("${meta.id}_annotation_criteria.tsv", sep="\\t", index
 process PHIDRA_ONLY {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
 
     input:
         tuple val(meta), path(criteria_tsv)
@@ -864,7 +819,7 @@ process PHIDRA_ONLY {
 process APPLY_CRITERIA {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
-    label 'standard'
+    label "process_single"
     publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
         mode: 'copy'
 
@@ -917,14 +872,14 @@ workflow ANNOTATE_PROTEINS {
         ch_dataset
 
     main:
-        ch_metadata = Channel.fromPath(params.genofeature_metadata)
+        ch_metadata = channel.fromPath(params.genofeature_metadata)
 
         // Normalize fasta input file
         CLEAN_FASTA_HEADERS(ch_dataset)
          
         // Prepare PHIDRA input
         ch_dataset_proteins = CLEAN_FASTA_HEADERS.out.fasta
-            .combine(Channel.fromList(params.proteins))
+            .combine(channel.fromList(params.proteins))
             .map { meta, fasta, protein_config -> 
                 def new_meta = meta + [
                     protein: protein_config.protein,
@@ -1085,28 +1040,16 @@ workflow ANNOTATE_PROTEINS {
 
 
 
-        ch_combine_datasets = APPLY_CRITERIA.out
+        ch_combine_datasets = APPLY_CRITERIA.out.results
             .map { meta, file -> file.toAbsolutePath() }
             .collect()
         
         COMBINE_DATASETS(ch_combine_datasets)
 
-        DUPLICATE_HANDLE(APPLY_CRITERIA.out)
+        DUPLICATE_HANDLE(APPLY_CRITERIA.out.results)
 
-        APPLY_CRITERIA.out.results
-            .map { meta, tsv -> [meta.id, meta, tsv] }
-            .combine(ch_cleaned_fasta, by: 0)
-            .map { id, meta, tsv, fasta -> tuple(meta, tsv, fasta) }
-            | SPLIT_BY_GENOFEATURE
-
-        // Barrier token: count() emits only after split channel is fully complete
-        ch_split_ready = SPLIT_BY_GENOFEATURE.out.count()
-        ch_combined_tsv = COMBINE_DATASETS.out.combined
-            .combine(ch_split_ready)
-            .map { combined_tsv, split_count -> combined_tsv }
-  
     emit:
-        ch_combined_tsv
+        ch_combined_tsv = COMBINE_DATASETS.out
 }
 
 
