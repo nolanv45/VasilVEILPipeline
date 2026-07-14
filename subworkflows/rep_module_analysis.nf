@@ -1,7 +1,7 @@
 nextflow.enable.dsl=2
 
 process GENERATE_COORDINATES_2 {
-    publishDir "${params.outdir}/second_coordinates",
+    publishDir "${params.outdir}/05_final_analysis/second_coordinates",
         mode: 'copy'
         
     label 'gpu'  
@@ -62,10 +62,9 @@ process GENERATE_COORDINATES_2 {
     def find_pt_files(base_dir):
         pt_files = []
         for root, _, files in os.walk(base_dir):
-            if 'batch_0' in root:
-                for file in files:
-                    if file.endswith('.pt'):
-                        pt_files.append(os.path.join(root, file))
+            for file in files:
+                if file.endswith('.pt'):
+                    pt_files.append(os.path.join(root, file))
         return pt_files
 
     # Load embeddings
@@ -150,9 +149,8 @@ process GENERATE_COORDINATES_2 {
 
 
 process MODULE_FILE {
-    
     container "containers/phidra/phidra.sif"
-    publishDir "${params.outdir}", 
+    publishDir "${params.outdir}/05_final_analysis/", 
         mode: 'copy',
         pattern: "*.tsv"
 
@@ -161,7 +159,7 @@ process MODULE_FILE {
     path(metadata_file)
 
     output:
-    path("contig_df.tsv"), emit: standardized
+    path("rep_module_df.tsv"), emit: standardized
 
     script:
     def excluded_list = params.excluded_genofeatures.collect { "\'${it}\'" }.join(', ')
@@ -204,7 +202,7 @@ contig_df['dataset'] = contig_df['contig_id'].map(
 cols = ['dataset', 'contig_id'] + genofeature_columns + ['module']
 contig_df = contig_df[cols]
 
-contig_df.to_csv("contig_df.tsv", sep='\t', index=False)
+contig_df.to_csv("rep_module_df.tsv", sep='\t', index=False)
 
 # stats file
 module_counts = contig_df['module'].value_counts().reset_index()
@@ -215,7 +213,7 @@ module_counts.to_csv("module_stats.tsv", sep='\t', index=False)
 
 
 process MODIFY_CLUSTERS {
-    publishDir "${params.outdir}/clusters",
+    publishDir "${params.outdir}/05_final_analysis/hdbscan/clusters",
         mode: 'copy'
         
     container "containers/phidra/phidra.sif"
@@ -296,7 +294,7 @@ df1_sorted.to_csv("hdbscan_modified_cluster_labels.tsv", index=False, sep="\t")
 }
 
 process HDBSCAN_TSV {
-    publishDir "${params.outdir}/clusters",
+    publishDir "${params.outdir}/05_final_analysis/hdbscan",
         mode: 'copy'
         
     container "containers/phidra/phidra.sif"
@@ -494,7 +492,7 @@ print(f"Total unclustered embeddings: {len(clusters_df[clusters_df['cluster_labe
 
 
 process HDBSCAN_VISUALS {
-    publishDir "${params.outdir}/clusters_imgs",
+    publishDir "${params.outdir}/05_final_analysis/hdbscan/visuals",
         mode: 'copy'
 
     container "containers/umap/umap.sif"
@@ -738,176 +736,8 @@ else:
     """
 }
 
-
-process ZEROFIVEC {
-    publishDir "${params.outdir}/clusters_imgs",
-        mode: 'copy'
-        
-    container "containers/umap/umap.sif"
-    
-    input:
-        path coordinates_dir  // Directory containing the pre-generated coordinates
-        path modified_clusters  // Modified clusters from previous process
-        
-    output:
-        path "umap_nn*"
-
-    script:
-    """
-#!/usr/bin/env python3
-import os
-import sys
-import numpy as np
-import matplotlib.pyplot as plt
-import umap
-import pandas as pd
-import matplotlib.lines as mlines
-import random  # <-- Add this import
-
-#----------v_25_06_25_umap_coordinates---------------------------------
-# refers to plotted coordinates from 04a umap script to cluster and map providing consistency and efficiency
-# updated to match 04a umap section for consistency. Map is plotting differently than 04a and 05a for some reason
-#--------- v_25_06_17------------------------------------
-# added script from Zach to plot more consistently
-# sections updated include SET SEED and Perform UMAP 
-# Alicia Holk aholk@udel.edu
-# ----------------------------------------------------
-
-
-
-# Define parameter ranges
-umap_nn = 100
-umap_md = 0.7
-
-
-def load_cluster_metadata(metadata_file):
-
-    try:
-        metadata_df = pd.read_csv(metadata_file, sep="\t")
-        if "embedding_id" not in metadata_df.columns or "cluster_label" not in metadata_df.columns:
-            raise ValueError("Metadata file must contain 'embedding_id' and 'cluster_label' columns.")
-        # Remove exact duplicate rows
-        metadata_df = metadata_df.drop_duplicates()
-
-        # Identify duplicated embedding_ids
-        duplicated_ids = metadata_df["embedding_id"].duplicated(keep=False)
-
-        # Remove only the rows where embedding_id is duplicated AND cluster_label is -1
-        metadata_df = metadata_df[~(duplicated_ids & (metadata_df["cluster_label"] == -1))]
-
-        # Reset index after cleanup
-        metadata_df = metadata_df.reset_index(drop=True)
-        return metadata_df
-    except Exception as e:
-        print(f"Error loading metadata file: {e}")
-        sys.exit(1)
-
-
-def plot_umap_with_metadata(umap_nn, umap_md, cluster_df, output_file):
-    
-    # Load UMAP coordinates from 04a (instead of recomputing)
-    coords_file = f"${coordinates_dir}/coordinates_nn{umap_nn}_md{int(umap_md * 10)}.tsv"
-
-    # Load coordinates and IDs from 04a
-    coord_df = pd.read_csv(coords_file, sep='\t')
-    umap_ids = coord_df['embedding_id'].tolist()
-    umap_coords = coord_df[['x', 'y']].values
-    
-    # Create mapping from embedding_id to coordinates
-    id_to_coords = {eid: coord for eid, coord in zip(umap_ids, umap_coords)}
-    
-    if len(common_ids) == 0:
-        print("Error: No common embedding IDs found between 04a coordinates and current embeddings")
-        return
-    
-    # Get coordinates for common IDs in the same order as they appear in common_ids
-    mapper = np.array([id_to_coords[eid] for eid in common_ids])
-    
-    print(f"Using {len(common_ids)} embeddings with coordinates from 04a")
-    
-    # Convert common embedding IDs to a dataframe for merging
-    embedding_df = pd.DataFrame({"embedding_id": common_ids})
-    # Merge with metadata to assign cluster labels
-    merged_df = embedding_df.merge(cluster_df, on="embedding_id", how="left")
-    labels = merged_df["cluster_label"].fillna(-1).values  # Assign -1 to unclustered points
-
-    clustered = labels >= 0  # Identify clustered points
-
-    # Plot UMAP without colorbar
-    fig, ax = plt.subplots(figsize=(10, 7))
-    scatter = ax.scatter(
-        mapper[clustered, 0],
-        mapper[clustered, 1],
-        c=labels[clustered],
-        s=10, alpha=0.5, cmap="Spectral"
-    )
-
-    ax.scatter(
-        mapper[~clustered, 0],
-        mapper[~clustered, 1],
-        color="gray", s=10, alpha=0.5, label="not clustered"
-    )
-
-    # Annotate cluster centers
-    unique_labels = np.unique(labels[labels >= 0])
-    for cluster in unique_labels:
-        cluster_points = mapper[labels == cluster]
-        center_x, center_y = cluster_points[:, 0].mean(), cluster_points[:, 1].mean()
-        ax.text(center_x, center_y, str(cluster), fontsize=10, ha='center', va='center')
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    # plt.title(f"UMAP with merged HDBSCAN Clustering (nn={umap_nn}, umap_md={umap_md})")
-    plt.grid(False)
-    plt.tight_layout()
-
-    # Save main plot (without colorbar)
-    plt.savefig(f"{output_file}.png", dpi=600)
-    plt.savefig(f"{output_file}.svg", transparent=True)
-    plt.close()
-    print(f"Saved: {output_file}")
-
-    # Save colorbar as a separate figure
-    colorbar_fig, colorbar_ax = plt.subplots(figsize=(1.2, 4))  # Adjust size as needed
-
-    norm = plt.Normalize(vmin=labels[clustered].min(), vmax=labels[clustered].max())
-    cbar = plt.colorbar(
-        plt.cm.ScalarMappable(norm=norm, cmap="Spectral"),
-        cax=colorbar_ax,
-        orientation='vertical'
-    )
-
-    cbar.set_label("Cluster Labels")
-    cbar.ax.hlines(90, 0, 1, color='black', linestyle='--', linewidth=2)
-
-    colorbar_fig.savefig(f"{output_file}_colorbar.png", dpi=300, bbox_inches="tight")
-    colorbar_fig.savefig(f"{output_file}_colorbar.svg", dpi=300, bbox_inches="tight")
-    plt.close(colorbar_fig)
-
-
-if __name__ == "__main__":
-    cluster_metadata = "${modified_clusters}"  # Metadata file with colors/markers
-
-    # Load cluster labels
-    cluster_df = load_cluster_metadata(cluster_metadata)
-    cluster_df.to_csv("hdbscan_modified_cluster_labels_no_duplicates.tsv")
-
-    embedding_ids = cluster_df["embedding_id"].tolist()
-
-    if len(embedding_ids) > 0:
-        output_file = f"umap_nn{umap_nn}_umapmd{int(umap_md * 10)}_with_combined_hdbscan_clusters"
-        plot_umap_with_metadata(umap_nn, umap_md, cluster_df, output_file)
-    else:
-        print("No valid embeddings found.")
-    """
-}
-
-
-
 process GENOFEATURE_CENTRIC {
-    publishDir "${params.outdir}/",
+    publishDir "${params.outdir}/05_final_analysis/umap",
         mode: 'copy'
         
     container "containers/umap/umap.sif"
@@ -938,15 +768,15 @@ import math
 # Load data
 coords_file = "${coordinates_file}"  # Path to coordinates file
 module_file = "${module_file}"  # Path to module file with genofeature information
-metadata_file = "${params.genofeature_metadata}"  # Path to metadata file
+metadata_file = "${metadata_file}"  # Path to metadata file
 connections_file = "${connections_file}"
 
-coord_df = pd.read_csv(coords_file, sep='\t')
+coord_df = pd.read_csv(coords_file, sep='\\t')
 embedding_id_to_index = {eid: idx for idx, eid in enumerate(coord_df['embedding_id'])}
 embedding_2d = coord_df[['x', 'y']].values
 
-module_df = pd.read_csv(module_file, sep='\t')
-metadata_df = pd.read_csv(metadata_file, sep="\t")
+module_df = pd.read_csv(module_file, sep='\\t')
+metadata_df = pd.read_csv(metadata_file, sep="\\t")
 color_map = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
 display_map = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 marker_map = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
@@ -954,7 +784,7 @@ genofeature_cols = [col for col in module_df.columns if col not in ['dataset', '
 
 connections = []
 if os.path.exists(connections_file):
-    connections_df = pd.read_csv(connections_file, sep='\t')
+    connections_df = pd.read_csv(connections_file, sep='\\t')
     connections = list(zip(connections_df['id1'], connections_df['id2']))
 
 plot_output_dir = "genofeature_plots"
@@ -1172,3 +1002,25 @@ print(f"All plots completed!")
 }
 
 
+workflow REP_MODULE_ANALYSIS {
+    take:
+        ch_combined_tsv
+
+    main:
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+    ch_module_file = MODULE_FILE(
+        ch_combined_tsv,
+        ch_metadata
+    )
+
+    GENERATE_COORDINATES_2("${params.outdir}/embeddings")
+    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+    MODIFY_CLUSTERS("${params.outdir}/04_parameter_selection/hdbscan/clusters_csv")
+    
+    HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
+    HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info, ch_metadata)
+    GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
+
+}

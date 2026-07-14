@@ -1,84 +1,147 @@
 nextflow.enable.dsl=2
 
-process EMBEDDINGS {
-    publishDir "${params.outdir}",
-        mode: 'copy'
-        
-    label 'gpu'  
-    container "containers/umap/umap.sif"
-    memory { 50.GB }
-    
+process EMBEDDING_PLAN {
+
+    label "process_single"
+
     input:
-        tuple val(meta), path(protein_dir)
-        path model_folder
-        
+    path(combined_tsv)
+
     output:
-        path "embeddings/${meta.id}/${meta.protein}", emit: embeddings_dirs
-        
+    path("**/*.fasta", optional: true)
+
     script:
+    def datasetsJson = groovy.json.JsonOutput.toJson(params.datasets)
     """
     #!/usr/bin/env bash
     set -euo pipefail
-    
-    mkdir -p "embeddings/${meta.id}/${meta.protein}"
-    echo "dataset: ${meta.id}"
-    echo "protein: ${meta.protein}"
-    echo "protein_dir: ${protein_dir}"
-    echo "model_folder: ${model_folder}"
 
-    for genofeature_dir in "${protein_dir}"/*; do
-        if [ -d "\$genofeature_dir" ]; then
-            genofeature=\$(basename "\$genofeature_dir")
-            echo "Processing genofeature directory: \$genofeature"
-            output_dir="embeddings/${meta.id}/${meta.protein}/\$genofeature"
-            mkdir -p "\$output_dir"
+    python3 - <<'PY'
+import json
+import pandas as pd
+from pathlib import Path
 
-            for fasta in "\$genofeature_dir"/*.fasta; do
-                if [ -f "\$fasta" ]; then
-                    fasta_base=\$(basename "\$fasta" .fasta)
-                    existing_base_dir="${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature"
-                    expected_count=\$(grep -c '^>' "\$fasta" || true)
-                    existing_count=0
-                    if [ -d "\$existing_base_dir" ]; then
-                        existing_count=\$(find "\$existing_base_dir" -type f -path '*/batch_*/*.pt' 2>/dev/null | wc -l)
-                    fi
+combined_tsv = "${combined_tsv}"
+datasets = json.loads('''${datasetsJson}''')
 
-                    # Reuse only when the existing embedding set appears complete for this fasta.
-                    if [ "\$expected_count" -gt 0 ] && [ "\$existing_count" -ge "\$expected_count" ]; then
-                        echo "Using existing embeddings for \$fasta_base"
-                        cp -r "${params.outdir}/embeddings/${meta.id}/${meta.protein}/\$genofeature" "embeddings/${meta.id}/${meta.protein}/"
-                    else
-                        if [ "\$existing_count" -gt 0 ]; then
-                            echo "Found incomplete embeddings for \$fasta_base (have \$existing_count, expected \$expected_count); regenerating"
-                        fi
-                        echo "Generating embeddings for \$fasta_base"
-                        python3 ${model_folder}/extract.py \\
-                            ${model_folder}/esm2_t36_3B_UR50D.pt \\
-                            "\$fasta" \\
-                            "\$output_dir" \\
-                            --repr_layers 36 \\
-                            --include mean || exit 1
-                    fi
-                fi
-            done
-        fi
-    done
+df = pd.read_csv(combined_tsv, sep='\t', dtype=str, keep_default_na=False)
+
+for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein', 'genofeature'], dropna=False):
+    dataset = str(dataset).strip()
+    protein = str(protein).strip()
+    genofeature = str(genofeature).strip()
+    if not dataset or not protein or not genofeature:
+        continue
+
+    fasta_path = Path(datasets.get(dataset, ''))
+    if not str(fasta_path):
+        raise KeyError(f"No fasta configured for dataset {dataset}")
+    if not fasta_path.exists():
+        raise FileNotFoundError(f"Configured fasta does not exist for {dataset}: {fasta_path}")
+
+    output_root = Path("${params.outdir}") / "embeddings" / dataset / protein / genofeature
+
+    expected_ids = {
+        str(orf_id).strip()
+        for orf_id in group_df.get('orf_id', pd.Series(dtype=str)).tolist()
+        if str(orf_id).strip()
+    }
+
+    existing_ids = {
+        pt.stem
+        for pt in output_root.rglob('*.pt')
+    } if output_root.exists() else set()
+
+    missing_ids = sorted(expected_ids - existing_ids)
+
+    if not missing_ids:
+        continue
+
+    missing_set = set(missing_ids)
+    out_fasta = Path(dataset) / protein / genofeature / f"{dataset}_{protein}_{genofeature}.fasta"
+    out_fasta.parent.mkdir(parents=True, exist_ok=True)
+
+    with fasta_path.open('r', encoding='utf-8') as fasta_handle, out_fasta.open('w', encoding='utf-8') as out_handle:
+        header = None
+        sequence_lines = []
+
+        def flush_record(record_header, record_lines):
+            if record_header is None:
+                return
+            record_id = record_header.split()[0]
+            if record_id in missing_set:
+                out_handle.write(f">{record_header}\\n")
+                for seq_line in record_lines:
+                    out_handle.write(seq_line)
+                    if not seq_line.endswith('\\n'):
+                        out_handle.write('\\n')
+
+        for raw_line in fasta_handle:
+            if raw_line.startswith('>'):
+                flush_record(header, sequence_lines)
+                header = raw_line[1:].strip()
+                sequence_lines = []
+            else:
+                sequence_lines.append(raw_line)
+
+        flush_record(header, sequence_lines)
+PY
     """
 }
 
 
+
+process EMBEDDINGS {
+    publishDir "${params.outdir}",
+        mode: 'copy'
+        
+    label 'process_gpu'  
+    container "containers/umap/umap.sif"
+    
+    input:
+        tuple val(dataset), val(protein), val(genofeature), path(fasta)
+        path model_folder
+        
+    output:
+        path "embeddings/${dataset}/${protein}/${genofeature}", emit: embeddings_dirs
+        
+    script:
+    """
+    set -euo pipefail
+
+    out_dir="embeddings/${dataset}/${protein}/${genofeature}"
+    mkdir -p "\$out_dir"
+
+    python3 ${model_folder}/extract.py \
+        ${model_folder}/esm2_t36_3B_UR50D.pt \
+        "${fasta}" \
+        "\$out_dir" \
+        --repr_layers 36 \
+        --include mean
+
+    for batch_dir in "\$out_dir"/batch_*; do
+        [ -d "\$batch_dir" ] || continue
+        mv "\$batch_dir"/*.pt "\$out_dir"/
+        rmdir "\$batch_dir" || true
+    done
+
+    """
+}
+
 process HDBSCAN {
-    publishDir "${params.outdir}/hdbscan",
+    publishDir "${params.outdir}/04_parameter_selection/hdbscan",
         mode: 'copy',
         saveAs: { filename ->
             if (filename.startsWith("plots/tiled_image_md")) filename
             else if (filename.startsWith("clusters_csv/")) filename
             else null
         }
-        
+
+    label "process_medium"
     container "containers/umap/umap.sif"
     
     input:
+        path embeddings_dirs
         path coordinates_dir  // Directory containing the pre-generated coordinates
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
@@ -100,6 +163,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import hdbscan
 import random 
+import torch
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 Image.MAX_IMAGE_PIXELS = None 
 
@@ -124,81 +189,97 @@ def load_and_resize_image(filepath, max_width=2400):
         print(f"Error loading image {filepath}: {e}")
         return None
 
-def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output):
+def find_pt_files(base_dir):
+    pt_files = []
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('.pt'):
+                pt_files.append(os.path.join(root, file))
+    return pt_files
+
+def load_raw_embeddings(embeddings_dirs_str):
+    embeddings = []
+    embedding_ids = []
+    base_dirs = embeddings_dirs_str.split() if isinstance(embeddings_dirs_str, str) else embeddings_dirs_str
+    pt_files = []
+    for base_dir in base_dirs:
+        pt_files.extend(find_pt_files(base_dir))
+    print(f"Found {len(pt_files)} .pt files")
+    for file_path in pt_files:
+        try:
+            data = torch.load(file_path, map_location='cpu')
+            emb = data["mean_representations"][36].numpy()
+            eid = data.get("label")
+            if emb is not None and eid is not None:
+                embeddings.append(emb)
+                embedding_ids.append(eid)
+        except Exception as e:
+            print(f"Warning: could not load {file_path}: {e}")
+    return np.stack(embeddings), embedding_ids
+
+def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output, raw_embeddings, raw_embedding_ids):
     try:
         md_int = int(md * 10)
-        coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+
+        # Load 2D coords for plotting only
+        coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
         coord_df = pd.read_csv(coord_file, sep='\t')
-        embedding_ids = coord_df['embedding_id'].tolist()
+        embedding_ids_2d = coord_df['embedding_id'].tolist()
         embedding_2d = coord_df[['x', 'y']].values
 
-        print(f"Loaded coordinates from {coord_file}")
-        print(f"Shape: {embedding_2d.shape}, IDs: {len(embedding_ids)}")
+        # Align raw embeddings to the order of the 2D coordinate IDs
+        id_to_raw = {eid: emb for eid, emb in zip(raw_embedding_ids, raw_embeddings)}
+        aligned_embeddings = np.stack([id_to_raw[eid] for eid in embedding_ids_2d if eid in id_to_raw])
+        aligned_ids = [eid for eid in embedding_ids_2d if eid in id_to_raw]
+        aligned_2d = np.stack([embedding_2d[i] for i, eid in enumerate(embedding_ids_2d) if eid in id_to_raw])
+
+        print(f"Clustering on {aligned_embeddings.shape[1]}-dimensional embeddings, plotting on 2D coords")
+
+        # Cluster on HIGH-DIMENSIONAL embeddings
+        labels = hdbscan.HDBSCAN(min_samples=2, min_cluster_size=mc).fit_predict(aligned_embeddings)
+        clustered = (labels >= 0)
 
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
 
-        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
-      
-        labels = hdbscan.HDBSCAN(min_samples=2, min_cluster_size=mc).fit_predict(embedding_2d)
-        clustered = (labels >= 0)
-
         cluster_df = pd.DataFrame({
-            'embedding_id': embedding_ids,
+            'embedding_id': aligned_ids,
             'cluster_label': labels,
-            #'genofeature': [id_to_genofeature.get(eid, "unknown") for eid in embedding_ids]
-            'genofeature': [module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0] 
-                if eid in module_df["normalized_orf_id"].values else "unknown" 
-                for eid in embedding_ids]
+            'genofeature': [module_df.loc[module_df["normalized_orf_id"] == eid, "genofeature"].iloc[0]
+                if eid in module_df["normalized_orf_id"].values else "unknown"
+                for eid in aligned_ids]
         })
 
         cluster_output_path = os.path.join(iteration_output,
-                                         f"hdbscan_nn{nn}_md{md_int}_minclust{mc}_clusters.csv")
+                                           f"hdbscan_nn{nn}_md{md_int}_minclust{mc}_clusters.csv")
         cluster_df.to_csv(cluster_output_path, index=False)
-        print(f"Cluster membership saved: {cluster_output_path}")
 
-        # Create plot
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Plot using 2D coords but colour by high-dim cluster labels
+        fig, ax = plt.subplots(figsize=(10, 10))
+        scatter = ax.scatter(aligned_2d[clustered, 0], aligned_2d[clustered, 1],
+                             c=labels[clustered], s=10, alpha=0.7, cmap="Spectral")
+        ax.scatter(aligned_2d[~clustered, 0], aligned_2d[~clustered, 1],
+                   color="gray", s=10, alpha=0.5, label="not clustered")
 
-        # Plot clustered points
-        scatter = ax.scatter(embedding_2d[clustered, 0], embedding_2d[clustered, 1],
-                           c=labels[clustered], s=10, alpha=0.7, cmap="Spectral")
-
-        # Plot unclustered points
-        ax.scatter(embedding_2d[~clustered, 0], embedding_2d[~clustered, 1],
-                  color="gray", s=10, alpha=0.5, label="not clustered")
-
-        # Label cluster centers
         unique_labels = np.unique(labels[labels >= 0])
         for cluster in unique_labels:
-            cluster_points = embedding_2d[labels == cluster]
-            center_x, center_y = cluster_points[:, 0].mean(), cluster_points[:, 1].mean()
-            plt.text(center_x, center_y, str(cluster),
-                    fontsize=10, weight='regular',
-                    ha='center', va='center')
+            cluster_points = aligned_2d[labels == cluster]
+            cx, cy = cluster_points[:, 0].mean(), cluster_points[:, 1].mean()
+            plt.text(cx, cy, str(cluster), fontsize=10, ha='center', va='center')
 
-        # Configure plot
         ax.set_xticks([])
         ax.set_yticks([])
         plt.grid(False)
-
         plt.title(f"UMAP (nn={nn}, md={md}) with HDBSCAN (minclust={mc})")
         plt.colorbar(scatter, label="Cluster Labels")
-        
-        # Save plot
         plt.tight_layout()
         plt.savefig(output_path, dpi=600, bbox_inches="tight")
-        print(f"Saved plot: {output_path}")
-        
         plt.close()
         return True
 
     except Exception as e:
         print(f"Error processing plot: {e}")
-        print("Debug info - metadata columns:", metadata_df.columns.tolist())
         return False
+
 
 # Main execution
 print("Loading metadata...")
@@ -212,25 +293,19 @@ os.makedirs("clusters_csv", exist_ok=True)
 
 # Copy input UMAP plots to working directory
 os.system("cp ${plots} plots/")
+# Load raw embeddings once before the loop
+raw_embeddings, raw_embedding_ids = load_raw_embeddings("${embeddings_dirs}")
 
-# Generate HDBSCAN plots for each UMAP plot
 for umap_file in os.listdir("plots"):
     if umap_file.startswith("umap_nn"):
-        # Extract parameters from filename
         parts = umap_file.replace(".png", "").split("_")
         nn = int(parts[1].replace("nn", ""))
         md = float(parts[2].replace("md", "")) / 10
         md_int = int(md * 10)
-        
-        # Load corresponding coordinates
-        # coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
-        # coord_df = pd.read_csv(coord_file, sep='\t')
-        
-        # Generate HDBSCAN plots with different min_cluster_size values
         for mc in ${params.mc}:
             output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
-            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv")
-
+            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv",
+                              raw_embeddings, raw_embedding_ids)
 
 from PIL import Image
 import math
@@ -399,13 +474,15 @@ tile_images("plots", "plots/tiled_image")
 
 
 process UMAP_PROJECTION {
-    publishDir "${params.outdir}/umap",
+    publishDir "${params.outdir}/04_parameter_selection/umap",
         mode: 'copy',
         saveAs: { filename ->
-            if (filename.endsWith("tiled_image.png")) filename
+            if (filename.endsWith("tiled_image.png")) {
+                return "umap_parameter_tiled.png"
+            }
             else null
         }
-        
+    label "process_medium"
     container "containers/umap/umap.sif"
     
     input:
@@ -438,7 +515,7 @@ os.makedirs("plots", exist_ok=True)
 def plot_umap(module_df, metadata_df, nn, md, output_file):
     # Load pre-generated UMAP coordinates and IDs
     md_int = int(md * 10)
-    coord_file = os.path.join("${coordinates_dir}", f"coords/coordinates_nn{nn}_md{md_int}.tsv")
+    coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
     conns_file = os.path.join("${coordinates_dir}", "connections.tsv")
 
     try:
@@ -452,10 +529,6 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
         
         # Prepare metadata mappings
         module_df["normalized_orf_id"] = module_df["orf_id"].str.replace(".", "-", regex=False)
-        # id_to_genofeature = dict(zip(module_df["normalized_orf_id"], module_df["genofeature"]))
-        # genofeature_to_color = dict(zip(metadata_df["genofeature"], metadata_df["color"]))
-        # genofeature_to_marker = dict(zip(metadata_df["genofeature"], metadata_df["marker"]))
-        # genofeature_to_display = dict(zip(metadata_df["genofeature"], metadata_df["display_name"]))
 
         # Assign colors and markers
         colors = []
@@ -490,7 +563,7 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
             print("No connections file found")
 
         # Create plot
-        fig, ax = plt.subplots(figsize=(10, 7))
+        fig, ax = plt.subplots(figsize=(10, 10))
 
         # Draw connections first (background)
         if len(connections) > 0:
@@ -751,22 +824,19 @@ tile_images("plots", "plots/tiled_image.png", legend_handles)
 }
 
 process GENERATE_COORDINATES {
-    publishDir "${params.outdir}",
+    publishDir "${params.outdir}/04_parameter_selection/coordinates",
         mode: 'copy'
         
-    label 'gpu'  
+    label "process_high_memory"
     container "containers/umap/umap.sif"
-    
-    memory { 50.GB }
-    
+
     input:
-        val embeddings_dirs
+        path embeddings_dirs
         
     output:
-        path "first_coordinates", emit: coordinates_files
+        path "coords", emit: coordinates_files
         
     script:
-    def embeddingsJson = groovy.json.JsonOutput.toJson(embeddings_dirs.collect { embDir -> embDir.toString() })
     """
     #!/usr/bin/env bash
     set -euo pipefail
@@ -775,11 +845,6 @@ process GENERATE_COORDINATES {
     mkdir -p \$PWD/.numba_cache
     chmod 1777 \$PWD/.numba_cache || true
     export NUMBA_CACHE_DIR=\$PWD/.numba_cache
-
-    # write embeddings list (safe from shell expansion)
-    cat > embeddings_list.json <<'JSON'
-${embeddingsJson}
-JSON
 
     # Run the Python script using the conda environment's python binary
     /opt/conda/envs/umap/bin/python - <<'PY'
@@ -793,7 +858,7 @@ import json
 from pathlib import Path
 
 # Create output directories
-os.makedirs("first_coordinates/coords", exist_ok=True)
+os.makedirs("coords", exist_ok=True)
 
 # SET SEED for reproducibility
 os.environ['PYTHONHASHSEED'] = '42'
@@ -817,23 +882,22 @@ def load_embedding(file_path):
 def find_pt_files(base_dir):
     pt_files = []
     for root, _, files in os.walk(base_dir):
-        if Path(root).name.startswith('batch_'):
-            for file in files:
-                if file.endswith('.pt'):
-                    pt_files.append(os.path.join(root, file))
+        for file in files:
+            if file.endswith('.pt'):
+                pt_files.append(os.path.join(root, file))
     return pt_files
 
 # Load embeddings
 embeddings = []
 embedding_ids = []
 
-import json as _json
-embedding_dirs = _json.load(open('embeddings_list.json'))
+base_dirs = "${embeddings_dirs}".split()
 
 # Find all .pt files
 pt_files = []
-for embedding_dir in embedding_dirs:
-    pt_files.extend(find_pt_files(embedding_dir))
+for base_dir in base_dirs:
+    if os.path.isdir(base_dir):
+        pt_files.extend(find_pt_files(base_dir))
 print(f"Found {len(pt_files)} .pt files")
 
 # Process each .pt file
@@ -873,14 +937,14 @@ if len(embeddings) > 0:
             
             # Save outputs with parameter-specific names
             md_int = int(md * 10)
-            coord_file = f"first_coordinates/coords/coordinates_nn{nn}_md{md_int}.tsv"
+            coord_file = f"coords/coordinates_nn{nn}_md{md_int}.tsv"
 
             coord_df = pd.DataFrame({
                 'embedding_id': embedding_ids,
                 'x': coordinates[:, 0],
                 'y': coordinates[:, 1]
             })
-            coord_df.to_csv(coord_file, sep='\t', index=False)
+            coord_df.to_csv(coord_file, sep='\\t', index=False)
             
     connections = []
     for contig_id, indices in groups.items():
@@ -892,10 +956,58 @@ if len(embeddings) > 0:
                     connections.append([id1, id2])
     # Save connections as TSV
     connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
-    connections_file = f"first_coordinates/connections.tsv"
-    connections_df.to_csv(connections_file, sep='\t', index=False)
+    connections_file = f"coords/connections.tsv"
+    connections_df.to_csv(connections_file, sep='\\t', index=False)
 
 PY
     """
 }
 
+
+workflow EMBEDDING_PARAMETER_DECISION {
+    take:
+        ch_combined_tsv
+        
+    main:
+    ch_filtered_tsv = ch_combined_tsv
+    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+
+    ch_embedding_plan = EMBEDDING_PLAN(ch_combined_tsv)
+
+    ch_embeddings = EMBEDDINGS(
+        ch_embedding_plan.flatten().map { fasta ->
+            def genofeature = fasta.parent.name
+            def protein = fasta.parent.parent.name
+            def dataset = fasta.parent.parent.parent.name
+            tuple(dataset, protein, genofeature, fasta)
+        },
+        "${baseDir}/tools/"
+    )
+
+    ch_existing_embedding_dirs = Channel
+        .fromPath("${params.outdir}/embeddings/*", type: 'dir')
+
+    ch_embedding_dirs = ch_existing_embedding_dirs
+        .mix(ch_embeddings.embeddings_dirs)
+        .unique()
+
+    ch_coordinates = GENERATE_COORDINATES(
+        ch_embedding_dirs.collect()
+    )
+
+    ch_umap = UMAP_PROJECTION(
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata
+    )
+
+    ch_hbd = HDBSCAN(
+        ch_embedding_dirs.collect(),
+        ch_coordinates,
+        ch_filtered_tsv,
+        ch_metadata,
+        ch_umap.plots       
+    )
+    emit:
+        ch_combined_tsv
+}
