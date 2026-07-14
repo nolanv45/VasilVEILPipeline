@@ -8,7 +8,8 @@ process EMBEDDING_PLAN {
     path(combined_tsv)
 
     output:
-    path("**/*.fasta", optional: true)
+    path("**/*.fasta"), emit: planned_fastas, optional: true
+    path("versions.yml"), emit: versions
 
     script:
     def datasetsJson = groovy.json.JsonOutput.toJson(params.datasets)
@@ -17,21 +18,40 @@ process EMBEDDING_PLAN {
     set -euo pipefail
 
     python3 - <<'PY'
+import csv
 import json
-import pandas as pd
+import re
+from collections import defaultdict
 from pathlib import Path
 
 combined_tsv = "${combined_tsv}"
 datasets = json.loads('''${datasetsJson}''')
 
-df = pd.read_csv(combined_tsv, sep='\t', dtype=str, keep_default_na=False)
+groups = defaultdict(set)
 
-for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein', 'genofeature'], dropna=False):
-    dataset = str(dataset).strip()
-    protein = str(protein).strip()
-    genofeature = str(genofeature).strip()
-    if not dataset or not protein or not genofeature:
-        continue
+def normalize_id(value: str) -> str:
+    token = (value or '').strip().split()[0]
+    token = token.replace('.', '-')
+    token = re.sub(r'[^A-Za-z0-9_-]', '', token)
+    return token
+
+with open(combined_tsv, 'r', encoding='utf-8', newline='') as combined_handle:
+    reader = csv.DictReader(combined_handle, delimiter='\\t')
+    fieldnames = set(reader.fieldnames or [])
+    required_cols = {'dataset', 'protein', 'genofeature', 'orf_id'}
+    missing_cols = required_cols - fieldnames
+    if missing_cols:
+        raise KeyError(f"Missing required columns in combined TSV: {sorted(missing_cols)}")
+
+    for row in reader:
+        dataset = (row.get('dataset') or '').strip()
+        protein = (row.get('protein') or '').strip()
+        genofeature = (row.get('genofeature') or '').strip()
+        orf_id = normalize_id(row.get('orf_id') or '')
+        if dataset and protein and genofeature and orf_id:
+            groups[(dataset, protein, genofeature)].add(orf_id)
+
+for (dataset, protein, genofeature), expected_ids in groups.items():
 
     fasta_path = Path(datasets.get(dataset, ''))
     if not str(fasta_path):
@@ -41,18 +61,16 @@ for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein
 
     output_root = Path("${params.outdir}") / "embeddings" / dataset / protein / genofeature
 
-    expected_ids = {
-        str(orf_id).strip()
-        for orf_id in group_df.get('orf_id', pd.Series(dtype=str)).tolist()
-        if str(orf_id).strip()
-    }
-
     existing_ids = {
-        pt.stem
+        normalize_id(pt.stem)
         for pt in output_root.rglob('*.pt')
     } if output_root.exists() else set()
 
-    missing_ids = sorted(expected_ids - existing_ids)
+    # Fallback guard for slight naming differences between TSV IDs and pt stems.
+    if len(existing_ids) >= len(expected_ids):
+        continue
+
+    missing_ids = sorted(expected_ids.difference(existing_ids))
 
     if not missing_ids:
         continue
@@ -64,17 +82,19 @@ for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein
     with fasta_path.open('r', encoding='utf-8') as fasta_handle, out_fasta.open('w', encoding='utf-8') as out_handle:
         header = None
         sequence_lines = []
+        written = {'count': 0}
 
         def flush_record(record_header, record_lines):
             if record_header is None:
                 return
-            record_id = record_header.split()[0]
+            record_id = normalize_id(record_header)
             if record_id in missing_set:
                 out_handle.write(f">{record_header}\\n")
                 for seq_line in record_lines:
                     out_handle.write(seq_line)
                     if not seq_line.endswith('\\n'):
                         out_handle.write('\\n')
+                written['count'] += 1
 
         for raw_line in fasta_handle:
             if raw_line.startswith('>'):
@@ -85,18 +105,39 @@ for (dataset, protein, genofeature), group_df in df.groupby(['dataset', 'protein
                 sequence_lines.append(raw_line)
 
         flush_record(header, sequence_lines)
+
+    # Do not emit empty FASTA files; that would trigger unnecessary EMBEDDINGS tasks.
+    if out_fasta.stat().st_size == 0 or written['count'] == 0:
+        out_fasta.unlink(missing_ok=True)
+PY
+
+    python3 - <<'PY'
+import platform
+
+process_name = "${task.process}"
+python_version = platform.python_version()
+
+try:
+    import pandas as pd
+    pandas_version = pd.__version__
+except Exception:
+    pandas_version = 'not_installed'
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"{process_name}":\\n')
+    handle.write(f'    python: {python_version}\\n')
+    handle.write(f'    pandas: {pandas_version}\\n')
 PY
     """
 }
-
-
 
 process EMBEDDINGS {
     publishDir "${params.outdir}",
         mode: 'copy'
         
-    label 'process_gpu'  
-    container "containers/umap/umap.sif"
+    label 'process_gpu' 
+    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
+    // container "containers/umap/umap.sif"
     
     input:
         tuple val(dataset), val(protein), val(genofeature), path(fasta)
@@ -104,7 +145,9 @@ process EMBEDDINGS {
         
     output:
         path "embeddings/${dataset}/${protein}/${genofeature}", emit: embeddings_dirs
+        path "versions.yml", emit: versions
         
+
     script:
     """
     set -euo pipefail
@@ -125,6 +168,29 @@ process EMBEDDINGS {
         rmdir "\$batch_dir" || true
     done
 
+    python3 - <<'PY'
+import platform
+from importlib import import_module
+
+process_name = "${task.process}"
+versions = [
+    f'"{process_name}":',
+    f'    python: {platform.python_version()}'
+]
+
+for package_name in ['numpy', 'pandas', 'torch', 'umap']:
+    try:
+        module = import_module(package_name)
+        version = getattr(module, '__version__', None)
+        if version:
+            versions.append(f'    {package_name}: {version}')
+    except Exception:
+        pass
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write('\\n'.join(versions) + '\\n')
+PY
+
     """
 }
 
@@ -138,7 +204,8 @@ process HDBSCAN {
         }
 
     label "process_medium"
-    container "containers/umap/umap.sif"
+    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
+    // container "containers/umap/umap.sif"
     
     input:
         path embeddings_dirs
@@ -151,6 +218,7 @@ process HDBSCAN {
         path "plots/*.png", emit: plots
         path "plots/tiled_image_md*", emit: tiled_image
         path "clusters_csv/*.csv", emit: clusters_csv
+        path "versions.yml", emit: versions
 
     script:
     """
@@ -283,8 +351,8 @@ def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration
 
 # Main execution
 print("Loading metadata...")
-module_df = pd.read_csv("${filtered_tsv}", sep='\t')
-metadata_df = pd.read_csv("${metadata_file}", sep='\t')
+module_df = pd.read_csv("${filtered_tsv}", sep='\\t')
+metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
 
 
 # Create required directories
@@ -468,6 +536,26 @@ def tile_images(image_dir, output_prefix, padding=10, bg_color=(255,255,255,255)
 
 # Call the function
 tile_images("plots", "plots/tiled_image")
+
+import platform
+from importlib import import_module
+
+versions = [
+    f'"${task.process}":',
+    f'    python: {platform.python_version()}'
+]
+
+for package_name in ['numpy', 'pandas', 'hdbscan', 'torch']:
+    try:
+        module = import_module(package_name)
+        version = getattr(module, '__version__', None)
+        if version:
+            versions.append(f'    {package_name}: {version}')
+    except Exception:
+        pass
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write('\\n'.join(versions) + '\\n')
     """
 }
 
@@ -483,7 +571,8 @@ process UMAP_PROJECTION {
             else null
         }
     label "process_medium"
-    container "containers/umap/umap.sif"
+    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
+    // container "containers/umap/umap.sif"
     
     input:
         path coordinates_dir  // Directory containing the pre-generated coordinates
@@ -493,7 +582,8 @@ process UMAP_PROJECTION {
     output:
         path "plots/tiled_image.png", emit: tiled_image
         path "plots/*.png", emit: plots
-        
+        path "versions.yml", emit: versions
+
     script:
     """
 #!/usr/bin/env python3
@@ -507,7 +597,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, __version__ as PIL_VERSION
 
 # Create output directory
 os.makedirs("plots", exist_ok=True)
@@ -520,7 +610,7 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
 
     try:
         # Load coordinates and their corresponding IDs
-        coord_df = pd.read_csv(coord_file, sep='\t')
+        coord_df = pd.read_csv(coord_file, sep='\\t')
         embedding_ids = coord_df['embedding_id'].tolist()
         embedding_2d = coord_df[['x', 'y']].values
         
@@ -546,7 +636,7 @@ def plot_umap(module_df, metadata_df, nn, md, output_file):
 
 
         if os.path.exists(conns_file):
-            connections_df = pd.read_csv(conns_file, sep='\t')
+            connections_df = pd.read_csv(conns_file, sep='\\t')
             print(f"Loaded {len(connections_df)} connections")
             
             # Create index mapping for connections
@@ -820,6 +910,21 @@ def tile_images(image_dir, output_file, legend_handles, padding=10, bg_color=(25
     print(f"Tiled image with legend saved as {output_file}")
     #--------END Tiled Image Block----------------
 tile_images("plots", "plots/tiled_image.png", legend_handles)
+
+import platform
+
+process_name = "${task.process}"
+versions = [
+    f'"{process_name}":',
+    f'    python: {platform.python_version()}',
+    f'    numpy: {np.__version__}',
+    f'    pandas: {pd.__version__}',
+    f'    matplotlib: {matplotlib.__version__}',
+    f'    PIL: {PIL_VERSION}'
+]
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write('\\n'.join(versions) + '\\n')
     """
 }
 
@@ -828,14 +933,16 @@ process GENERATE_COORDINATES {
         mode: 'copy'
         
     label "process_high_memory"
-    container "containers/umap/umap.sif"
+    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
+    // container "containers/umap/umap.sif"
 
     input:
         path embeddings_dirs
         
     output:
         path "coords", emit: coordinates_files
-        
+        path "versions.yml", emit: versions
+
     script:
     """
     #!/usr/bin/env bash
@@ -847,7 +954,7 @@ process GENERATE_COORDINATES {
     export NUMBA_CACHE_DIR=\$PWD/.numba_cache
 
     # Run the Python script using the conda environment's python binary
-    /opt/conda/envs/umap/bin/python - <<'PY'
+#!/usr/bin/env python3
 import os
 import torch
 import numpy as np
@@ -959,6 +1066,27 @@ if len(embeddings) > 0:
     connections_file = f"coords/connections.tsv"
     connections_df.to_csv(connections_file, sep='\\t', index=False)
 
+print("Writing versions.yml")
+import platform
+from importlib import import_module
+
+versions = [
+    f'"${task.process}":',
+    f'    python: {platform.python_version()}'
+]
+
+for package_name in ['numpy', 'pandas', 'torch', 'umap']:
+    try:
+        module = import_module(package_name)
+        version = getattr(module, '__version__', None)
+        if version:
+            versions.append(f'    {package_name}: {version}')
+    except Exception:
+        pass
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write('\\n'.join(versions) + '\\n')
+
 PY
     """
 }
@@ -972,10 +1100,10 @@ workflow EMBEDDING_PARAMETER_DECISION {
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = Channel.fromPath(params.genofeature_metadata)
 
-    ch_embedding_plan = EMBEDDING_PLAN(ch_combined_tsv)
+    EMBEDDING_PLAN(ch_combined_tsv)
 
     ch_embeddings = EMBEDDINGS(
-        ch_embedding_plan.flatten().map { fasta ->
+        EMBEDDING_PLAN.out.planned_fastas.flatten().map { fasta ->
             def genofeature = fasta.parent.name
             def protein = fasta.parent.parent.name
             def dataset = fasta.parent.parent.parent.name
@@ -991,23 +1119,38 @@ workflow EMBEDDING_PARAMETER_DECISION {
         .mix(ch_embeddings.embeddings_dirs)
         .unique()
 
-    ch_coordinates = GENERATE_COORDINATES(
+    GENERATE_COORDINATES(
         ch_embedding_dirs.collect()
     )
 
     ch_umap = UMAP_PROJECTION(
-        ch_coordinates,
+        GENERATE_COORDINATES.out.coordinates_files,
         ch_filtered_tsv,
         ch_metadata
     )
 
     ch_hbd = HDBSCAN(
         ch_embedding_dirs.collect(),
-        ch_coordinates,
+        GENERATE_COORDINATES.out.coordinates_files,
         ch_filtered_tsv,
         ch_metadata,
         ch_umap.plots       
     )
+
+    ch_multiqc_files = channel.empty()
+    ch_multiqc_files = ch_multiqc_files.mix(ch_umap.tiled_image)
+    ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.tiled_image)
+    ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.plots)
+
+    ch_versions = channel.empty()
+    ch_versions = ch_versions.mix(EMBEDDING_PLAN.out.versions)
+    ch_versions = ch_versions.mix(EMBEDDINGS.out.versions)
+    ch_versions = ch_versions.mix(HDBSCAN.out.versions)
+    ch_versions = ch_versions.mix(UMAP_PROJECTION.out.versions)
+    ch_versions = ch_versions.mix(GENERATE_COORDINATES.out.versions)
+
     emit:
-        ch_combined_tsv
+        ch_combined_tsv = ch_combined_tsv
+        versions = ch_versions
+        multiqc_files = ch_multiqc_files
 }

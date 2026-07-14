@@ -10,10 +10,20 @@ process CLEAN_FASTA_HEADERS {
 
     output:
         tuple val(meta), path("${meta.id}_cleaned.fasta"), emit: fasta
-
+        path("versions.yml"), emit: versions
     script:
     """
     awk 'BEGIN{RS=">"; ORS=""} NR>1{n=index(\$0, "\\n"); header=substr(\$0,1,n-1); sub(/[[:space:]].*/, "", header); gsub(/\\./, "-", header); gsub(/[^A-Za-z0-9_-]/, "", header); if (header == "") header = "seq_" NR; seq=substr(\$0,n+1); gsub(/\\n/, "", seq); gsub(/\\*/, "", seq); print ">"header"\\n"seq"\\n"}' ${fasta} > "${meta.id}_cleaned.fasta"
+
+    python3 - <<'PY'
+import subprocess
+
+awk_version = subprocess.check_output("awk --version | head -n1 | sed 's/.*Awk //; s/,.*//'", shell=True, text=True).strip()
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    awk: {awk_version}\\n')
+PY
     """
 }
 
@@ -21,8 +31,9 @@ process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label "process_medium"
-    publishDir "${params.outdir}/01_phidra/${meta.id}",
-        mode: 'copy'
+    publishDir "${params.outdir}/01_phidra",
+        mode: 'copy',
+        saveAs: { filename -> "${meta.id}/${filename}" }
 
     input:
         tuple val(meta), path(fasta), path(subject_db), path(pfamIDA)
@@ -36,6 +47,7 @@ process PHIDRA {
               path("*/mmseqs/initial/hits.tsv"),
               path("*/mmseqs/recursive/hits.tsv"),
               emit: results
+        path("versions.yml"), emit: versions
 
     script:
     """
@@ -66,20 +78,29 @@ process PHIDRA {
     cp ${meta.protein}/final_results/unvalidated_ida_pfams/pfam_unvalidated_merged_report.tsv \
     ${meta.protein}/${meta.protein}_pfam_unvalidated_report.tsv
 
+    python3 - <<'PY'
+import platform
+
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+PY
     """
 }
+
 
 process CRITERIA_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label "process_single"
-    
+
     input:
         // Changed path to val to allow safe passing of empty lists/placeholders
         tuple val(meta), path(all_files)
 
     output:
-        tuple val(meta), path("${meta.id}_annotation_criteria.tsv")
+        tuple val(meta), path("${meta.id}_annotation_criteria.tsv"), emit: results
+        path("versions.yml"), emit: versions
 
     script:
     def file_list_str = all_files.collect { "\"${it}\"" }.join(", ")
@@ -103,7 +124,7 @@ for f in validated_files:
         df['PASV_Spans'] = ""
         df['Dataset'] = "${meta.id}"
         df['Protein'] = os.path.basename(f).split("_", 1)[0]
-        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]  # set genofeature to protein by default, specify by method of annotation downstream
+        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]
         all_phidra_dfs.append(df)
 
 for f in unvalidated_files:
@@ -114,12 +135,17 @@ for f in unvalidated_files:
         df['PASV_Spans'] = ""
         df['Dataset'] = "${meta.id}"
         df['Protein'] = os.path.basename(f).split("_", 1)[0]
-        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]  # set genofeature to protein by default, specify by method of annotation downstream
+        df['Genofeature'] = os.path.basename(f).split("_", 1)[0]
         all_phidra_dfs.append(df)
 
 combined_df = pd.concat(all_phidra_dfs, ignore_index=True)
 
 combined_df.to_csv('${meta.id}_annotation_criteria.tsv', sep='\\t', index=False)
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
 """
 }
 
@@ -133,6 +159,7 @@ process DOMAIN_MATCH_ANNOTATION {
 
     output:
         tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
+        path("versions.yml"), emit: versions
 
     script:
     def map_json = groovy.json.JsonOutput.toJson(params.pfam_annotation_map)
@@ -159,24 +186,29 @@ for idx in df[mask].index:
             break
 
 df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
-
 
 process PASV {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label "process_medium"
-    publishDir "${params.outdir}/02_pasv/${meta.id}/${meta.protein}",
+    publishDir "${params.outdir}/02_pasv",
         mode: 'copy',
-        pattern: "pasv/output/${meta.protein}_putative.pasv_signatures.tsv",
-        saveAs: { filename -> file(filename).name }
+        pattern: "pasv/output/*_putative.pasv_signatures.tsv",
+        saveAs: { filename -> "${meta.id}/${meta.protein}/${filename}" }
 
     input:
         tuple val(meta), path(val_fasta, stageAs: 'val_full.fa'), path(unval_fasta, stageAs: 'unval_full.fa'), path(align_refs)
 
     output:
-        tuple val(meta), path("pasv/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results   
+        tuple val(meta), path("pasv/output/${meta.protein}_putative.pasv_signatures.tsv"), emit: results
+        path("versions.yml"), emit: versions
 
     script:
     """
@@ -229,7 +261,7 @@ process PASV_ANNOTATION {
 
     output:
         tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
-
+        path("versions.yml"), emit: versions
     script:
     """
 #!/usr/bin/env python3
@@ -250,6 +282,11 @@ for idx in df[mask].index:
         df.at[idx, "PASV_Spans"] = pasv_map[query_id]["spans"]
 
 df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -270,9 +307,12 @@ process ANALYZE_AND_PLOT {
 
     output:
         tuple val(meta),
-            path("${meta.protein}_stats.tsv"),
-            path("${meta.protein}_length_distribution.png"),
+            path("${meta.id}_${meta.protein}_stats.tsv"),
+            path("${meta.id}_${meta.protein}_length_distribution_mqc.png"),
             emit: results
+            path("${meta.id}_${meta.protein}_length_distribution_mqc.png"),
+            emit: multiqc_plot
+        path("versions.yml"), emit: versions
     script:
     """
 #!/usr/bin/env python3
@@ -331,7 +371,7 @@ stats.columns = ['genofeature', 'count', 'mean_length', 'min_length', 'max_lengt
 stats = stats.sort_values('genofeature')
 
 # Save statistics
-stats.to_csv("${meta.protein}_stats.tsv", sep='\\t', index=False)
+stats.to_csv("${meta.id}_${meta.protein}_stats.tsv", sep='\\t', index=False)
 
 # Create a violin plot with the same overall treatment used by PASV_POST.
 fig, ax_plot = plt.subplots(
@@ -396,8 +436,18 @@ ax_plot.grid(True, axis='x', linestyle='--', alpha=0.7)
 ax_plot.tick_params(axis='y', labelsize=10, pad=28)
 
 fig.tight_layout()
-fig.savefig("${meta.protein}_length_distribution.png", bbox_inches='tight', dpi=300)
+fig.savefig("${meta.id}_${meta.protein}_length_distribution_mqc.png", bbox_inches='tight', dpi=300)
 plt.close()
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
+    handle.write(f'    matplotlib: {plt.matplotlib.__version__}\\n')
+    handle.write(f'    seaborn: {sns.__version__}\\n')
+    import Bio
+    handle.write(f'    biopython: {Bio.__version__}\\n')
     """
 }
 
@@ -407,7 +457,6 @@ process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     container "containers/phidra/phidra.sif"
     label "process_single"
-
     publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
         pattern: "*.{tsv,png}",
@@ -426,10 +475,12 @@ process PASV_POST {
 
     output:
         tuple val(meta),
-              path("${meta.protein}_signature_stats.tsv"),
-              path("${meta.protein}_signature_distribution.png"),
+              path("${meta.id}_${meta.protein}_signature_stats.tsv"),
+              path("${meta.id}_${meta.protein}_signature_distribution_mqc.png"),
               emit: results
-
+              path("${meta.id}_${meta.protein}_signature_distribution_mqc.png"),
+              emit: multiqc_plot
+        path("versions.yml"), emit: versions
     script:
     """
 #!/usr/bin/env python3
@@ -487,12 +538,12 @@ df = df[df['name'].isin(passed_ids)].copy()
 print(f"After criteria filter: {df.shape}")
 
 if df.empty:
-    print("WARNING: no sequences passed criteria for ${meta.protein}", file=sys.stderr)
-    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.protein}_processed.tsv", sep='\\t', index=False)
-    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
+    print("WARNING: no sequences passed criteria for ${meta.id} ${meta.protein}", file=sys.stderr)
+    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.id}_${meta.protein}_processed.tsv", sep='\\t', index=False)
+    pd.DataFrame(columns=['signature', 'span_class', 'count']).to_csv("${meta.id}_${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
     fig, ax = plt.subplots()
     ax.text(0.5, 0.5, 'No data passed criteria', ha='center', va='center')
-    plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
+    plt.savefig("${meta.id}_${meta.protein}_signature_distribution_mqc.png", bbox_inches='tight', dpi=300)
     plt.close()
     exit(0)
 
@@ -592,11 +643,21 @@ for i, span in enumerate(span_classes):
     ax.tick_params(axis='y', labelsize=10, pad=40)
 
 plt.subplots_adjust(left=0.25, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
-fig.suptitle("${meta.protein} Signature Distribution", fontsize=16, y=1.02)
+fig.suptitle("${meta.id} ${meta.protein} Signature Distribution", fontsize=16, y=1.02)
 
-stats.to_csv("${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
-plt.savefig("${meta.protein}_signature_distribution.png", bbox_inches='tight', dpi=300)
+stats.to_csv("${meta.id}_${meta.protein}_signature_stats.tsv", sep='\\t', index=False)
+plt.savefig("${meta.id}_${meta.protein}_signature_distribution_mqc.png", bbox_inches='tight', dpi=300)
 plt.close()
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
+    handle.write(f'    matplotlib: {plt.matplotlib.__version__}\\n')
+    handle.write(f'    seaborn: {sns.__version__}\\n')
+    import Bio
+    handle.write(f'    biopython: {Bio.__version__}\\n')
     """
 }
 
@@ -614,7 +675,7 @@ process TOP_HIT_ANNOTATION {
 
     output:
     tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
-
+    path("versions.yml"), emit: versions
     script:
     """
 #!/usr/bin/env python3
@@ -664,9 +725,13 @@ for idx in df[mask].index:
         df.at[idx, "Genofeature"] = recursive_map[query_id]
 
 df.to_csv("${meta.protein}_annotation_criteria.tsv", sep="\\t", index=False)
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
-
 
 process DUPLICATE_HANDLE {
     tag "${meta.id}"
@@ -674,35 +739,42 @@ process DUPLICATE_HANDLE {
     container "containers/phidra/phidra.sif"
     label "process_single"
 
-    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}", 
+    publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
-        pattern: "*.tsv"
+        pattern: "*.tsv",
+        saveAs: { filename -> "${meta.id}/${filename}" }
 
     input:
         tuple val(meta), path(input_file)    // Properly declare the input file
 
     output:
         tuple val(meta), path("duplicate_orfs.tsv")   // Declare the output file
-
+        path("versions.yml"), emit: versions
     script:
     """
-    #!/usr/bin/env python3
-    import pandas as pd
-    
-    # Read the input file with proper quoting and correct separator
-    df = pd.read_csv("${input_file}", sep='\\t')
+#!/usr/bin/env python3
+import pandas as pd
 
-    # Find duplicates based on both contig_id and orf_id
-    duplicates = df[df.duplicated(subset=['contig_id', 'orf_id'], keep=False)]
-    
-    # Sort duplicates for better readability
-    duplicates = duplicates.sort_values(['contig_id', 'orf_id'])
+# Read the input file with proper quoting and correct separator
+df = pd.read_csv("${input_file}", sep='\\t')
 
-    # Save duplicates with tab separator
-    duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
-    
-    # Print summary for debugging
-    print(f"Found {len(duplicates)} duplicate entries")
+# Find duplicates based on both contig_id and orf_id
+duplicates = df[df.duplicated(subset=['contig_id', 'orf_id'], keep=False)]
+
+# Sort duplicates for better readability
+duplicates = duplicates.sort_values(['contig_id', 'orf_id'])
+
+# Save duplicates with tab separator
+duplicates.to_csv('duplicate_orfs.tsv', sep='\\t', index=False)
+
+# Print summary for debugging
+print(f"Found {len(duplicates)} duplicate entries")
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -718,39 +790,45 @@ process COMBINE_DATASETS {
         path(tsv_files)
 
     output:
-        path "combined_datasets.tsv"
-
+        path "combined_datasets.tsv", emit: results
+        path("versions.yml"), emit: versions
     script:
     """
-    #!/usr/bin/env python3
-    import pandas as pd
-    import os
+#!/usr/bin/env python3
+import pandas as pd
+import os
 
-    dfs = []
-    input_files = "${tsv_files}".split()
+dfs = []
+input_files = "${tsv_files}".split()
 
-    for tsv_file in input_files:
-        if os.path.exists(tsv_file):
-            print(f"Reading file: {tsv_file}")
-            try:
-                df = pd.read_csv(tsv_file, sep='\\t')
-                if not df.empty:
-                    dfs.append(df)
-                    print(f"Added {len(df)} rows from {tsv_file}")
-                else:
-                    print(f"Warning: Empty DataFrame from {tsv_file}")
-            except Exception as e:
-                print(f"Error reading {tsv_file}: {str(e)}")
-        else:
-            print(f"Warning: File not found: {tsv_file}")
-
-    if dfs:
-        combined = pd.concat(dfs, ignore_index=True)
-        print(f"Combined DataFrame has {len(combined)} rows")
-        combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
+for tsv_file in input_files:
+    if os.path.exists(tsv_file):
+        print(f"Reading file: {tsv_file}")
+        try:
+            df = pd.read_csv(tsv_file, sep='\\t')
+            if not df.empty:
+                dfs.append(df)
+                print(f"Added {len(df)} rows from {tsv_file}")
+            else:
+                print(f"Warning: Empty DataFrame from {tsv_file}")
+        except Exception as e:
+            print(f"Error reading {tsv_file}: {str(e)}")
     else:
-        print("No data to combine, creating empty output")
-        pd.DataFrame(columns=['contig_id', 'orf_id', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
+        print(f"Warning: File not found: {tsv_file}")
+
+if dfs:
+    combined = pd.concat(dfs, ignore_index=True)
+    print(f"Combined DataFrame has {len(combined)} rows")
+    combined.to_csv("combined_datasets.tsv", sep='\\t', index=False)
+else:
+    print("No data to combine, creating empty output")
+    pd.DataFrame(columns=['contig_id', 'orf_id', 'genofeature', 'protein', 'dataset']).to_csv("combined_datasets.tsv", sep='\\t', index=False)
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -758,15 +836,16 @@ process MERGE_TSV {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label "process_single"
-    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
-        mode: 'copy'
+    publishDir "${params.outdir}/03_annotation_analysis",
+        mode: 'copy',
+        saveAs: { filename -> "${meta.id}/${filename}" }
 
     input:
         tuple val(meta), path(tsvs)
 
     output:
         tuple val(meta), path("${meta.id}_annotation_criteria.tsv"), emit: results
-
+        path("versions.yml"), emit: versions
     script:
     def tsv_list = tsvs.collect { "\"${it}\"" }.join(", ")
     """
@@ -795,6 +874,12 @@ for protein, df in protein_df_map.items():
     base.update(protein_rows)
 
 base.reset_index().to_csv("${meta.id}_annotation_criteria.tsv", sep="\\t", index=False)
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -808,10 +893,16 @@ process PHIDRA_ONLY {
 
     output:
         tuple val(meta), path("${meta.protein}_annotation_criteria.tsv"), emit: results
-
+        path("versions.yml"), emit: versions
     script:
     """
     cp ${criteria_tsv} ${meta.protein}_annotation_criteria.tsv
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -820,15 +911,16 @@ process APPLY_CRITERIA {
     tag "${meta.id}"
     container "containers/phidra/phidra.sif"
     label "process_single"
-    publishDir "${params.outdir}/03_annotation_analysis/${meta.id}",
-        mode: 'copy'
+    publishDir "${params.outdir}/03_annotation_analysis",
+        mode: 'copy',
+        saveAs: { filename -> "${meta.id}/${filename}" }
 
     input:
         tuple val(meta), path(criteria_tsv)
 
     output:
         tuple val(meta), path("${meta.id}_genofeatures.tsv"), emit: results
-
+        path("versions.yml"), emit: versions
     script:
     def pasv_proteins_json = groovy.json.JsonOutput.toJson(params.pasv_proteins ?: [])
     def orf_drop = params.orf_coord_fields[meta.id] ?: -1
@@ -862,6 +954,12 @@ df[["contig_id", "orf_id", "Genofeature", "Protein", "Dataset"]].rename(columns=
     "Dataset":    "dataset",
     "Genofeature": "genofeature"
 }).to_csv("${meta.id}_genofeatures.tsv", sep="\\t", index=False)
+
+import platform
+with open('versions.yml', 'w', encoding='utf-8') as handle:
+    handle.write(f'"${task.process}":\\n')
+    handle.write(f'    python: {platform.python_version()}\\n')
+    handle.write(f'    pandas: {pd.__version__}\\n')
     """
 }
 
@@ -912,7 +1010,7 @@ workflow ANNOTATE_PROTEINS {
         // ----------------------------------------------------------------------
         // JOIN CRITERIA TSV WITH PHIDRA RESULTS
         // ----------------------------------------------------------------------
-        ch_tsv = CRITERIA_TSV.out.map { meta, tsv -> [meta.id, tsv] }
+        ch_tsv = CRITERIA_TSV.out.results.map { meta, tsv -> [meta.id, tsv] }
 
         ch_phidra_keyed = PHIDRA.out.results
             .map { meta, val_fasta, val_pfam, unval_fasta, unval_pfam, init, recurs ->
@@ -1043,13 +1141,32 @@ workflow ANNOTATE_PROTEINS {
         ch_combine_datasets = APPLY_CRITERIA.out.results
             .map { meta, file -> file.toAbsolutePath() }
             .collect()
-        
+
         COMBINE_DATASETS(ch_combine_datasets)
 
         DUPLICATE_HANDLE(APPLY_CRITERIA.out.results)
 
+        ch_annotation_plots = ANALYZE_AND_PLOT.out.multiqc_plot
+            .mix(PASV_POST.out.multiqc_plot)
+
+        ch_versions = PHIDRA.out.versions
+            .mix(CRITERIA_TSV.out.versions)
+            .mix(TOP_HIT_ANNOTATION.out.versions)
+            .mix(PASV_ANNOTATION.out.versions)
+            .mix(DOMAIN_MATCH_ANNOTATION.out.versions)
+            .mix(PHIDRA_ONLY.out.versions)
+            .mix(MERGE_TSV.out.versions)
+            .mix(APPLY_CRITERIA.out.versions)
+            .mix(ANALYZE_AND_PLOT.out.versions)
+            .mix(PASV.out.versions)
+            .mix(PASV_POST.out.versions)
+            .mix(COMBINE_DATASETS.out.versions)
+
+
     emit:
-        ch_combined_tsv = COMBINE_DATASETS.out
+        ch_combined_tsv = COMBINE_DATASETS.out.results
+        multiqc_files = ch_annotation_plots
+        versions = ch_versions
 }
 
 

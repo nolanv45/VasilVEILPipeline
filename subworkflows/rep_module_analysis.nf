@@ -15,9 +15,10 @@ process GENERATE_COORDINATES_2 {
     output:
         path "second_coordinates/coordinates_nn*.tsv", emit: coordinates_tsv
         path "second_coordinates/connections.tsv", emit: connections_tsv
+        path "versions.yml", emit: versions
         
     script:
-    def excluded_list = params.excluded_genofeatures.collect { "\'${it}\'" }.join(', ')
+    def excluded_list = params.excluded_genofeatures.collect { feature -> "\'${feature}\'" }.join(', ')
     """
      #!/usr/bin/env bash
     set -euo pipefail
@@ -140,6 +141,16 @@ process GENERATE_COORDINATES_2 {
         connections_file = f"second_coordinates/connections.tsv"
         connections_df.to_csv(connections_file, sep='\t', index=False)
 
+            import platform
+
+            with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+                versions_handle.write("\"${task.process}\":\n")
+                versions_handle.write(f"    python: {platform.python_version()}\n")
+                versions_handle.write(f"    numpy: {np.__version__}\n")
+                versions_handle.write(f"    pandas: {pd.__version__}\n")
+                versions_handle.write(f"    torch: {torch.__version__}\n")
+                versions_handle.write(f"    umap: {umap.__version__}\n")
+
     PY
     """
 }
@@ -160,9 +171,10 @@ process MODULE_FILE {
 
     output:
     path("rep_module_df.tsv"), emit: standardized
+    path("versions.yml"), emit: versions
 
     script:
-    def excluded_list = params.excluded_genofeatures.collect { "\'${it}\'" }.join(', ')
+    def excluded_list = params.excluded_genofeatures.collect { feature -> "\'${feature}\'" }.join(', ')
     """
 #!/usr/bin/env python3
 # will take tsv files that output from each dataset per orf basis.
@@ -208,6 +220,13 @@ contig_df.to_csv("rep_module_df.tsv", sep='\t', index=False)
 module_counts = contig_df['module'].value_counts().reset_index()
 module_counts.columns = ['module', 'count']
 module_counts.to_csv("module_stats.tsv", sep='\t', index=False)
+
+import platform
+
+with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+    versions_handle.write("\"${task.process}\":\n")
+    versions_handle.write(f"    python: {platform.python_version()}\n")
+    versions_handle.write(f"    pandas: {pd.__version__}\n")
     """
 }
 
@@ -223,6 +242,7 @@ process MODIFY_CLUSTERS {
         
     output:
         path "hdbscan_modified_cluster_labels.tsv", emit: modified_clusters
+        path "versions.yml", emit: versions
 
     script:
     """
@@ -290,6 +310,13 @@ df1_sorted = df1.sort_values(by='cluster_label')
 
 # Save the modified dataframe to a new file
 df1_sorted.to_csv("hdbscan_modified_cluster_labels.tsv", index=False, sep="\t")
+
+import platform
+
+with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+    versions_handle.write("\"${task.process}\":\n")
+    versions_handle.write(f"    python: {platform.python_version()}\n")
+    versions_handle.write(f"    pandas: {pd.__version__}\n")
     """
 }
 
@@ -306,6 +333,7 @@ process HDBSCAN_TSV {
     output:
         path "hdbscan_cluster_info.tsv", emit: cluster_info
         path "hdbscan_cluster_relationships.tsv", emit: cluster_relationships
+        path "versions.yml", emit: versions
 
     script:
     """
@@ -487,6 +515,13 @@ print(f"Shape: {relationships_df.shape}")
 print("\\n=== HDBSCAN_TSV Complete ===")
 print(f"Total clusters: {len(unique_clusters)}")
 print(f"Total unclustered embeddings: {len(clusters_df[clusters_df['cluster_label'] == -1])}")
+
+import platform
+
+with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+    versions_handle.write("\"${task.process}\":\n")
+    versions_handle.write(f"    python: {platform.python_version()}\n")
+    versions_handle.write(f"    pandas: {pd.__version__}\n")
     """
 }
 
@@ -506,13 +541,15 @@ process HDBSCAN_VISUALS {
         path "hdbscan_dataset_composition_stacked_bar.png", emit: dataset_stacked
         path "hdbscan_genofeature_composition_stacked_bar.png", emit: genofeature_stacked
         path "hdbscan_genofeature_composition_size_scaled_stacked_bar.png", emit: genofeature_size_scaled
+        path "versions.yml", emit: versions
 
     script:
     """
 #!/usr/bin/env python3
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import matplotlib
+    import matplotlib.pyplot as plt
 
 
 def save_placeholder(output_file, title, message):
@@ -733,6 +770,15 @@ else:
         'Genofeature Composition (Size-Scaled)',
         'No genofeature count columns found in cluster info TSV.'
     )
+
+import platform
+
+with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+    versions_handle.write("\"${task.process}\":\n")
+    versions_handle.write(f"    python: {platform.python_version()}\n")
+    versions_handle.write(f"    numpy: {np.__version__}\n")
+    versions_handle.write(f"    pandas: {pd.__version__}\n")
+    versions_handle.write(f"    matplotlib: {matplotlib.__version__}\n")
     """
 }
 
@@ -751,6 +797,7 @@ process GENOFEATURE_CENTRIC {
         
     output:
         path "genofeature_plots/"
+        path "versions.yml", emit: versions
 
 
     script:
@@ -998,6 +1045,17 @@ def tile_images(image_dir, output_file, padding=10):
 tiled_output_file = os.path.join(plot_output_dir, "genofeature_highlighting_tiled_all.png")
 tile_images(plot_output_dir, tiled_output_file)
 print(f"All plots completed!")
+
+import platform
+import PIL
+
+with open("versions.yml", "w", encoding="utf-8") as versions_handle:
+    versions_handle.write("\"${task.process}\":\n")
+    versions_handle.write(f"    python: {platform.python_version()}\n")
+    versions_handle.write(f"    numpy: {np.__version__}\n")
+    versions_handle.write(f"    pandas: {pd.__version__}\n")
+    versions_handle.write(f"    matplotlib: {plt.matplotlib.__version__}\n")
+    versions_handle.write(f"    pillow: {PIL.__version__}\n")
     """
 }
 
@@ -1007,7 +1065,7 @@ workflow REP_MODULE_ANALYSIS {
         ch_combined_tsv
 
     main:
-    ch_metadata = Channel.fromPath(params.genofeature_metadata)
+    ch_metadata = channel.fromPath(params.genofeature_metadata)
 
     ch_module_file = MODULE_FILE(
         ch_combined_tsv,
@@ -1022,5 +1080,17 @@ workflow REP_MODULE_ANALYSIS {
     HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
     HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info, ch_metadata)
     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
+
+    ch_versions = channel.empty()
+    ch_versions = ch_versions.mix(MODULE_FILE.out.versions)
+    ch_versions = ch_versions.mix(GENERATE_COORDINATES_2.out.versions)
+    ch_versions = ch_versions.mix(MODIFY_CLUSTERS.out.versions)
+    ch_versions = ch_versions.mix(HDBSCAN_TSV.out.versions)
+    ch_versions = ch_versions.mix(HDBSCAN_VISUALS.out.versions)
+    ch_versions = ch_versions.mix(GENOFEATURE_CENTRIC.out.versions)
+
+    emit:
+        coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
+        versions = ch_versions
 
 }
