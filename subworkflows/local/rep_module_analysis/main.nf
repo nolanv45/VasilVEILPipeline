@@ -1,164 +1,3 @@
-nextflow.enable.dsl=2
-
-process GENERATE_COORDINATES_2 {
-    publishDir "${params.outdir}/05_final_analysis/second_coordinates",
-        mode: 'copy'
-        
-    label 'gpu'  
-    container "containers/umap/umap.sif"
-    
-    memory { 50.GB }
-    
-    input:
-        path(embeddings)   
-        
-    output:
-        path "second_coordinates/coordinates_nn*.tsv", emit: coordinates_tsv
-        path "second_coordinates/connections.tsv", emit: connections_tsv
-        path "versions.yml", emit: versions
-        
-    script:
-    def excluded_list = params.excluded_genofeatures.collect { feature -> "\'${feature}\'" }.join(', ')
-    """
-     #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Ensure a writable Numba cache directory in the work folder
-    mkdir -p \$PWD/.numba_cache
-    chmod 1777 \$PWD/.numba_cache || true
-    export NUMBA_CACHE_DIR=\$PWD/.numba_cache
-
-    # Run the Python script using the conda environment's python binary
-    /opt/conda/envs/umap/bin/python - <<'PY'
-    import os
-    import torch
-    import numpy as np
-    import umap
-    import random
-    import pandas as pd
-    from pathlib import Path
-
-    # Create output directories
-    os.makedirs("second_coordinates", exist_ok=True)
-   
-    # SET SEED for reproducibility
-    os.environ['PYTHONHASHSEED'] = '42'
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
-
-    def load_embedding(file_path):
-        try:
-            embedding_data = torch.load(file_path, map_location='cpu')
-            embedding = embedding_data["mean_representations"][36].numpy()
-            embedding_id = embedding_data.get("label")
-            return embedding, embedding_id
-        except Exception as e:
-            print(f"Error loading {file_path}: {e}")
-            return None, None
-
-    def find_pt_files(base_dir):
-        pt_files = []
-        for root, _, files in os.walk(base_dir):
-            for file in files:
-                if file.endswith('.pt'):
-                    pt_files.append(os.path.join(root, file))
-        return pt_files
-
-    # Load embeddings
-    embeddings = []
-    embedding_ids = []
-    
-    # Find all .pt files
-    pt_files = find_pt_files("${embeddings}")
-    print(f"Found {len(pt_files)} .pt files")
-    
-    # Process each .pt file
-    excluded_subdirs = [${excluded_list}]
-    for file_path in pt_files:
-        genofeature = Path(file_path).parent.parent.name
-        if genofeature.lower() not in [s.lower() for s in excluded_subdirs]:
-            print(f"Processing: {file_path}")
-            embedding, embedding_id = load_embedding(file_path)
-            if embedding is not None and embedding_id is not None:
-                embeddings.append(embedding)
-                embedding_ids.append(embedding_id)
-                print(f"Successfully loaded embedding from {file_path}")
-        else:
-            print(f"Skipping excluded genofeature: {genofeature} in {file_path}")
-
-    if len(embeddings) > 0:
-        print(f"Processing {len(embeddings)} embeddings")
-        embeddings = np.stack(embeddings)
-
-        groups = {}
-        for i, eid in enumerate(embedding_ids):
-            contig_id = '_'.join(eid.split('_')[:-3])  # Parse embedding ID
-            if contig_id not in groups:
-                groups[contig_id] = []
-            groups[contig_id].append(i)
-        
-        # Generate UMAP for each parameter combination
-        nn = ${params.final_nn}
-        md = ${params.final_md}
-
-
-        print(f"Generating UMAP with nn={nn}, md={md}")
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=nn,
-            min_dist=md,
-            metric='cosine',
-            random_state=42,
-            transform_seed=42,
-            n_epochs=200
-        )
-        coordinates = reducer.fit_transform(embeddings)
-        
-        md_int = int(md * 10)
-        coord_file = f"second_coordinates/coordinates_nn{nn}_md{md_int}.tsv"
-
-        coord_df = pd.DataFrame({
-            'embedding_id': embedding_ids,
-            'x': coordinates[:, 0],
-            'y': coordinates[:, 1]
-        })
-        coord_df.to_csv(coord_file, sep='\t', index=False)
-                
-        connections = []
-        for contig_id, indices in groups.items():
-            if len(indices) > 1:
-                for i in range(len(indices) - 1):
-                    for j in range(i + 1, len(indices)):
-                        id1 = embedding_ids[indices[i]]
-                        id2 = embedding_ids[indices[j]]
-                        connections.append([id1, id2])
-        # Save connections as TSV
-        connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
-        connections_file = f"second_coordinates/connections.tsv"
-        connections_df.to_csv(connections_file, sep='\t', index=False)
-
-            import platform
-
-            with open("versions.yml", "w", encoding="utf-8") as versions_handle:
-                versions_handle.write("\"${task.process}\":\n")
-                versions_handle.write(f"    python: {platform.python_version()}\n")
-                versions_handle.write(f"    numpy: {np.__version__}\n")
-                versions_handle.write(f"    pandas: {pd.__version__}\n")
-                versions_handle.write(f"    torch: {torch.__version__}\n")
-                versions_handle.write(f"    umap: {umap.__version__}\n")
-
-    PY
-    """
-}
-
-
-
-
-
 process MODULE_FILE {
     container "containers/phidra/phidra.sif"
     publishDir "${params.outdir}/05_final_analysis/", 
@@ -1059,7 +898,7 @@ with open("versions.yml", "w", encoding="utf-8") as versions_handle:
     """
 }
 
-
+include { GENERATE_COORDINATES } from '../../../modules/local/generate_coordinates'
 workflow REP_MODULE_ANALYSIS {
     take:
         ch_combined_tsv
@@ -1071,26 +910,35 @@ workflow REP_MODULE_ANALYSIS {
         ch_combined_tsv,
         ch_metadata
     )
+    def excluded_genofeatures = params.excluded_genofeatures.collect { feature -> "\'${feature}\'" }.join(', ')
+    def final_nn = "${params.final_nn}"
+    def final_md = "${params.final_md}"
+    ch_generate_coordinates_inputs = tuple("${params.outdir}/embeddings", excluded_genofeatures, final_nn, final_md, "05_final_analysis/coordinates")
 
-    GENERATE_COORDINATES_2("${params.outdir}/embeddings")
-    ch_coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
-    ch_connections = GENERATE_COORDINATES_2.out.connections_tsv
+
+
+    GENERATE_COORDINATES(ch_generate_coordinates_inputs)
+    ch_coordinates = GENERATE_COORDINATES.out.coordinates_files
+    ch_connections = GENERATE_COORDINATES.out.connections_tsv
     MODIFY_CLUSTERS("${params.outdir}/04_parameter_selection/hdbscan/clusters_csv")
     
     HDBSCAN_TSV(MODIFY_CLUSTERS.out.modified_clusters, ch_combined_tsv)
     HDBSCAN_VISUALS(HDBSCAN_TSV.out.cluster_info, ch_metadata)
     GENOFEATURE_CENTRIC(ch_module_file, ch_coordinates, ch_connections, params.genofeature_metadata)
 
+    // ch_multiqc_files = channel.empty()
+    // ch_multiqc_files = ch_multiqc_files.mix(ch_umap.tiled_image)
+    // ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.tiled_image)
+    // ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.plots)
+
     ch_versions = channel.empty()
     ch_versions = ch_versions.mix(MODULE_FILE.out.versions)
-    ch_versions = ch_versions.mix(GENERATE_COORDINATES_2.out.versions)
+    ch_versions = ch_versions.mix(GENERATE_COORDINATES.out.versions)
     ch_versions = ch_versions.mix(MODIFY_CLUSTERS.out.versions)
     ch_versions = ch_versions.mix(HDBSCAN_TSV.out.versions)
     ch_versions = ch_versions.mix(HDBSCAN_VISUALS.out.versions)
     ch_versions = ch_versions.mix(GENOFEATURE_CENTRIC.out.versions)
 
-    emit:
-        coordinates = GENERATE_COORDINATES_2.out.coordinates_tsv
-        versions = ch_versions
+    emit: ch_versions
 
 }

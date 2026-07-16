@@ -1,9 +1,9 @@
 nextflow.enable.dsl=2
 
 // SUBWORKFLOW: Three subworkflows consisting of local modules
-include { REP_MODULE_ANALYSIS } from '../subworkflows/rep_module_analysis'
-include { ANNOTATE_PROTEINS } from '../subworkflows/annotate_proteins'
-include { EMBEDDING_PARAMETER_DECISION } from '../subworkflows/embedding_parameter_decision'
+include { REP_MODULE_ANALYSIS } from '../subworkflows/local/rep_module_analysis'
+include { ANNOTATE_PROTEINS } from '../subworkflows/local/annotate_proteins'
+include { EMBEDDING_PARAMETER_DECISION } from '../subworkflows/local/embedding_parameter_decision'
 include { MULTIQC } from '../modules/nf-core/multiqc'
 include { paramsSummaryMap } from 'plugin/nf-schema'
 include { paramsSummaryMultiqc } from '../subworkflows/nf-core/utils_nfcore_pipeline'
@@ -15,8 +15,6 @@ workflow VEILPIPELINE {
     multiqc_config
     multiqc_logo
     multiqc_methods_description
-
-
 
     main:
     ch_versions = channel.empty()

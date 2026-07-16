@@ -1,3 +1,19 @@
+# VEIL/veilpipeline: Documentation
+
+The VEIL/veilpipeline documentation is split into the following pages:
+
+- [Usage](usage.md)
+  - An overview of how the pipeline works, how to run it and a description of all of the different command-line flags.
+- [Output](output.md)
+  - An overview of the different results produced by the pipeline and how to interpret them.
+
+
+
+
+
+
+
+
 # VEIL Environmental Metagenomic Phage Replication Module Pipeline
 A Nextflow pipeline for identifying and analyzing phage replication proteins and replication modules in environmental viral metagenomes.
 
