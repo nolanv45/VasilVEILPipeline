@@ -6,14 +6,12 @@ process HDBSCAN {
             else if (filename.startsWith("clusters_csv/")) filename
             else null
         }
-
     label "process_medium"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
-    // container "containers/umap/umap.sif"
+    conda "${moduleDir}/environment.yml"
     
     input:
         path embeddings_dirs
-        path coordinates_dir  // Directory containing the pre-generated coordinates
+        val coordinates_dir  // Space-separated list of coordinate directories
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
         path plots
@@ -28,6 +26,8 @@ process HDBSCAN {
     """
 #!/usr/bin/env python3
 import os
+import glob
+import re
 # Ensure matplotlib has a writable config dir in container/work environments
 os.environ.setdefault('MPLCONFIGDIR', '/tmp/matplotlib')
 import numpy as np
@@ -69,6 +69,13 @@ def find_pt_files(base_dir):
                 pt_files.append(os.path.join(root, file))
     return pt_files
 
+def normalize_input_dirs(raw_value):
+    raw_value = str(raw_value).strip()
+    if not raw_value:
+        return []
+    cleaned = raw_value.strip('[]')
+    return [item for item in re.split(r'[\s,]+', cleaned) if item]
+
 def load_raw_embeddings(embeddings_dirs_str):
     embeddings = []
     embedding_ids = []
@@ -89,12 +96,9 @@ def load_raw_embeddings(embeddings_dirs_str):
             print(f"Warning: could not load {file_path}: {e}")
     return np.stack(embeddings), embedding_ids
 
-def plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, iteration_output, raw_embeddings, raw_embedding_ids):
+def plot_umap_hdbscan(module_df, metadata_df, coord_file, nn, md, mc, output_path, iteration_output, raw_embeddings, raw_embedding_ids):
     try:
-        md_int = int(md * 10)
-
         # Load 2D coords for plotting only
-        coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
         coord_df = pd.read_csv(coord_file, sep='\t')
         embedding_ids_2d = coord_df['embedding_id'].tolist()
         embedding_2d = coord_df[['x', 'y']].values
@@ -168,16 +172,23 @@ os.system("cp ${plots} plots/")
 # Load raw embeddings once before the loop
 raw_embeddings, raw_embedding_ids = load_raw_embeddings("${embeddings_dirs}")
 
-for umap_file in os.listdir("plots"):
-    if umap_file.startswith("umap_nn"):
-        parts = umap_file.replace(".png", "").split("_")
-        nn = int(parts[1].replace("nn", ""))
-        md = float(parts[2].replace("md", "")) / 10
-        md_int = int(md * 10)
-        for mc in ${params.mc}:
-            output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
-            plot_umap_hdbscan(module_df, metadata_df, nn, md, mc, output_path, "clusters_csv",
-                              raw_embeddings, raw_embedding_ids)
+coordinate_files = []
+for base_dir in normalize_input_dirs("${coordinates_dir}"):
+    coordinate_files.extend(sorted(glob.glob(os.path.join(base_dir, "coordinates_nn*_md*.tsv"))))
+
+if not coordinate_files:
+    raise ValueError("No coordinate files found in the supplied coordinate directories")
+
+for coord_file in coordinate_files:
+    base_name = os.path.basename(coord_file)
+    parts = base_name.replace(".tsv", "").split("_")
+    nn = int(parts[1].replace("nn", ""))
+    md = float(parts[2].replace("md", "")) / 10
+    md_int = int(md * 10)
+    for mc in ${params.mc}:
+        output_path = f"plots/hdbscan_nn{nn}_md{md_int}_minclust{mc}.png"
+        plot_umap_hdbscan(module_df, metadata_df, coord_file, nn, md, mc, output_path, "clusters_csv",
+                          raw_embeddings, raw_embedding_ids)
 
 from PIL import Image
 import math

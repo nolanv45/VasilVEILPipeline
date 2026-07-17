@@ -1,8 +1,7 @@
 process PASV_POST {
     tag "${meta.id}:${meta.protein}"
-    // container "containers/phidra/phidra.sif"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/phidra/phidra.yml"
     label "process_single"
+    conda "${moduleDir}/environment.yml"
     publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
         pattern: "*.{tsv,png}",

@@ -1,29 +1,19 @@
 process GENERATE_COORDINATES {
     publishDir { "${params.outdir}/${publish_subdir}" },
         mode: 'copy'
-        
-    label "gpu"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
+    label 'process_gpu'
+    conda "${moduleDir}/environment.yml"
     // container "containers/umap/umap.sif"
 
     input:
         tuple path(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
         
     output:
-        path "coords", emit: coordinates_files
+        path "${publish_subdir}", emit: coordinates_files
         path "versions.yml", emit: versions
 
     script:
     """
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Ensure a writable Numba cache directory in the work folder
-    mkdir -p \$PWD/.numba_cache
-    chmod 1777 \$PWD/.numba_cache || true
-    export NUMBA_CACHE_DIR=\$PWD/.numba_cache
-
-    # Run the Python script using the conda environment's python binary
 #!/usr/bin/env python3
 import os
 import torch
@@ -35,7 +25,7 @@ import json
 from pathlib import Path
 
 # Create output directories
-os.makedirs("coords", exist_ok=True)
+os.makedirs("${publish_subdir}", exist_ok=True)
 
 # SET SEED for reproducibility
 os.environ['PYTHONHASHSEED'] = '42'
@@ -78,7 +68,14 @@ for base_dir in base_dirs:
 print(f"Found {len(pt_files)} .pt files")
 
 # Process each .pt file
-excluded_subdirs = [${excluded_genofeatures}]
+excluded_raw = "${excluded_genofeatures}".strip()
+excluded_subdirs = []
+if excluded_raw and excluded_raw.lower() not in ['null', 'none']:
+    excluded_subdirs = [
+        s.strip().strip("'").strip('"')
+        for s in excluded_raw.split(',')
+        if s.strip()
+    ]
 for file_path in pt_files:
     genofeature = Path(file_path).parent.parent.name
     if genofeature.lower() not in [s.lower() for s in excluded_subdirs]:
@@ -102,14 +99,14 @@ if len(embeddings) > 0:
             groups[contig_id] = []
         groups[contig_id].append(i)
     
-    nn = ${nn}
-    md = ${md}
+    nn = int(${nn})
+    md = float(${md})
     # Generate UMAP for parameter
     print(f"Generating UMAP with nn={nn}, md={md}")
     reducer = umap.UMAP(
         n_components=2,
-        n_neighbors={nn},
-        min_dist={md},
+        n_neighbors=nn,
+        min_dist=md,
         metric='cosine',
         random_state=42,
         transform_seed=42,
@@ -119,7 +116,7 @@ if len(embeddings) > 0:
     
     # Save outputs with parameter-specific names
     md_int = int(md * 10)
-    coord_file = f"coords/coordinates_nn{nn}_md{md_int}.tsv"
+    coord_file = f"${publish_subdir}/coordinates_nn{nn}_md{md_int}.tsv"
 
     coord_df = pd.DataFrame({
         'embedding_id': embedding_ids,
@@ -138,7 +135,7 @@ if len(embeddings) > 0:
                     connections.append([id1, id2])
     # Save connections as TSV
     connections_df = pd.DataFrame(connections, columns=['id1', 'id2'])
-    connections_file = f"coords/connections.tsv"
+    connections_file = f"${publish_subdir}/connections.tsv"
     connections_df.to_csv(connections_file, sep='\\t', index=False)
 
 print("Writing versions.yml")
@@ -161,7 +158,5 @@ for package_name in ['numpy', 'pandas', 'torch', 'umap']:
 
 with open('versions.yml', 'w', encoding='utf-8') as handle:
     handle.write('\\n'.join(versions) + '\\n')
-
-PY
     """
 }

@@ -8,11 +8,10 @@ process UMAP_PROJECTION {
             else null
         }
     label "process_medium"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
-    // container "containers/umap/umap.sif"
+    conda "${moduleDir}/environment.yml"
     
     input:
-        path coordinates_dir  // Directory containing the pre-generated coordinates
+        val coordinates_dir  // Space-separated list of coordinate directories
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
         
@@ -25,6 +24,8 @@ process UMAP_PROJECTION {
     """
 #!/usr/bin/env python3
 import os
+import glob
+import re
 # Ensure matplotlib has a writable config dir in container/work environments
 os.environ.setdefault('MPLCONFIGDIR', '/tmp/matplotlib')
 import numpy as np
@@ -39,11 +40,16 @@ from PIL import Image, ImageDraw, ImageFont, __version__ as PIL_VERSION
 # Create output directory
 os.makedirs("plots", exist_ok=True)
 
-def plot_umap(module_df, metadata_df, nn, md, output_file):
+def normalize_input_dirs(raw_value):
+    raw_value = str(raw_value).strip()
+    if not raw_value:
+        return []
+    cleaned = raw_value.strip('[]')
+    return [item for item in re.split(r'[\\s,]+', cleaned) if item]
+
+def plot_umap(module_df, metadata_df, coord_file, output_file):
     # Load pre-generated UMAP coordinates and IDs
-    md_int = int(md * 10)
-    coord_file = os.path.join("${coordinates_dir}", f"coordinates_nn{nn}_md{md_int}.tsv")
-    conns_file = os.path.join("${coordinates_dir}", "connections.tsv")
+    conns_file = os.path.join(os.path.dirname(coord_file), "connections.tsv")
 
     try:
         # Load coordinates and their corresponding IDs
@@ -139,14 +145,24 @@ print("Loading metadata...")
 module_df = pd.read_csv("${filtered_tsv}", sep='\\t')
 metadata_df = pd.read_csv("${metadata_file}", sep='\\t')
 
-# Generate plots for specified parameters
+# Generate plots for all coordinate files in all coordinate directories
+coordinate_files = []
+for base_dir in normalize_input_dirs("${coordinates_dir}"):
+    coordinate_files.extend(sorted(glob.glob(os.path.join(base_dir, "coordinates_nn*_md*.tsv"))))
+
+if not coordinate_files:
+    raise ValueError("No coordinate files found in the supplied coordinate directories")
+
 legend_handles = None
-for nn in ${params.nn}:
-    for md in ${params.md}:
-        output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
-        handles = plot_umap(module_df, metadata_df, nn, md, output_file)
-        if legend_handles is None:
-            legend_handles = handles
+for coord_file in coordinate_files:
+    base_name = os.path.basename(coord_file)
+    parts = base_name.replace(".tsv", "").split("_")
+    nn = int(parts[1].replace("nn", ""))
+    md = float(parts[2].replace("md", "")) / 10
+    output_file = f"plots/umap_nn{nn}_md{int(md*10)}.png"
+    handles = plot_umap(module_df, metadata_df, coord_file, output_file)
+    if legend_handles is None:
+        legend_handles = handles
 
 from PIL import Image
 

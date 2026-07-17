@@ -1,10 +1,8 @@
 process EMBEDDINGS {
     publishDir "${params.outdir}",
         mode: 'copy'
-        
-    label 'process_gpu' 
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/umap/umap.yml" 
-    // container "containers/umap/umap.sif"
+    label 'process_gpu'
+    conda "${moduleDir}/environment.yml"
     
     input:
         tuple val(dataset), val(protein), val(genofeature), path(fasta)

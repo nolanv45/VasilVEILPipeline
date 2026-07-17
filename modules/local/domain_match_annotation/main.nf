@@ -1,8 +1,7 @@
 process DOMAIN_MATCH_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
-    // container "containers/phidra/phidra.sif"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/phidra/phidra.yml"
     label "process_single"
+    conda "${moduleDir}/environment.yml"
 
     input:
         tuple val(meta), path(criteria_tsv)

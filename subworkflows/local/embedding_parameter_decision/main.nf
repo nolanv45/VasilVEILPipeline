@@ -49,30 +49,33 @@ workflow EMBEDDING_PARAMETER_DECISION {
     // Create one input tuple for each parameter combination
     ch_embedding_dirs
         .collect()
+        .map { dirs -> dirs.join(' ') }
         .combine(ch_parameter_combinations)
-        .map { embedding_dirs, param_tuple ->
-            def (nn, md) = param_tuple
+        .map { item ->
+            def (embedding_dirs, nn, md) = item
+            def md_tag = (md instanceof Number) ? (md * 10).intValue() : (md.toString().replace('.', '') as int)
             tuple(
                 embedding_dirs,
                 excluded_genofeatures,
                 nn,
                 md,
-                "04_parameter_selection/coordinates"
+                "04_parameter_selection/coordinates/nn${nn}_md${md_tag}"
             )
         }
         .set { ch_generate_coordinates_inputs }
 
     GENERATE_COORDINATES(ch_generate_coordinates_inputs)
+    ch_coordinate_dirs = GENERATE_COORDINATES.out.coordinates_files.collect().map { dirs -> dirs.join(' ') }
 
     ch_umap = UMAP_PROJECTION(
-        GENERATE_COORDINATES.out.coordinates_files,
+        ch_coordinate_dirs,
         ch_filtered_tsv,
         ch_metadata
     )
 
     ch_hbd = HDBSCAN(
         ch_embedding_dirs.collect(),
-        GENERATE_COORDINATES.out.coordinates_files,
+        ch_coordinate_dirs,
         ch_filtered_tsv,
         ch_metadata,
         ch_umap.plots       

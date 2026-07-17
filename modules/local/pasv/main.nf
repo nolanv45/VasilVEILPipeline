@@ -1,8 +1,7 @@
 process PASV {
     tag "${meta.id}:${meta.protein}"
-    // container "containers/phidra/phidra.sif"
-    conda "/mnt/biostore-all/Polson/users/nolanv/pipeline_project/VasilVEILPipeline/containers/phidra/phidra.yml" 
     label "process_medium"
+    conda "${moduleDir}/environment.yml"
     publishDir "${params.outdir}/02_pasv",
         mode: 'copy',
         pattern: "pasv/output/*_putative.pasv_signatures.tsv",
