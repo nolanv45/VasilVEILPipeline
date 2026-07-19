@@ -8,4 +8,4 @@ dependencies:
   - conda-forge::pandas=2.2.2
   - conda-forge::matplotlib=3.8.4
   - conda-forge::seaborn=0.13.2
-  - bioconda::biopython=1.83
+  - conda-forge::biopython=1.83

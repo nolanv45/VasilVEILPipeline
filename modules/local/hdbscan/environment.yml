@@ -11,3 +11,4 @@ dependencies:
   - conda-forge::matplotlib=3.8.4
   - conda-forge::hdbscan=0.8.38
   - conda-forge::pillow=10.3.0
+  - conda-forge::scikit-learn=1.5.2

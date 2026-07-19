@@ -8,4 +8,4 @@ dependencies:
   - bioconda::mmseqs2=13-45111
   - bioconda::hmmer=3.4
   - conda-forge::tqdm=4.66.4
-  - bioconda::biopython=1.83
+  - conda-forge::biopython=1.83

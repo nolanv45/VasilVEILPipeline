@@ -4,6 +4,6 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
-  - bioconda::mafft=7.526
+  - bioconda::mafft
   - conda-forge::wget=1.21.4
   - conda-forge::unzip=6.0
