@@ -42,30 +42,33 @@ workflow EMBEDDING_PARAMETER_DECISION {
         }
     }
 
-    channel
-        .from(parameter_combinations)
-        .set { ch_parameter_combinations }
-
     // Create one input tuple for each parameter combination
-    ch_embedding_dirs
+    ch_generate_coordinates_inputs = ch_embedding_dirs
         .collect()
-        .map { dirs -> dirs.join(' ') }
-        .combine(ch_parameter_combinations)
-        .map { item ->
-            def (embedding_dirs, nn, md) = item
-            def md_tag = (md instanceof Number) ? (md * 10).intValue() : (md.toString().replace('.', '') as int)
-            tuple(
-                embedding_dirs,
-                excluded_genofeatures,
-                nn,
-                md,
-                "04_parameter_selection/coordinates/nn${nn}_md${md_tag}"
-            )
+        .flatMap { dirs ->
+
+            parameter_combinations.collect { combo ->
+
+                def nn = combo[0]
+                def md = combo[1]
+
+                def md_tag = (md * 10).intValue()
+
+                tuple(
+                    dirs,
+                    excluded_genofeatures,
+                    nn,
+                    md,
+                    "04_parameter_selection/coordinates/nn${nn}_md${md_tag}"
+                )
+            }
         }
-        .set { ch_generate_coordinates_inputs }
+
+    ch_generate_coordinates_inputs.view()
 
     GENERATE_COORDINATES(ch_generate_coordinates_inputs)
-    ch_coordinate_dirs = GENERATE_COORDINATES.out.coordinates_files.collect().map { dirs -> dirs.join(' ') }
+
+    ch_coordinate_dirs = GENERATE_COORDINATES.out.coordinates_files.collect()
 
     ch_umap = UMAP_PROJECTION(
         ch_coordinate_dirs,

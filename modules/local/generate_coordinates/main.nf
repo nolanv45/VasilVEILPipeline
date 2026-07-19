@@ -6,7 +6,7 @@ process GENERATE_COORDINATES {
     // container "containers/umap/umap.sif"
 
     input:
-        tuple path(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
+        tuple val(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
         
     output:
         path "${publish_subdir}", emit: coordinates_files
@@ -58,7 +58,7 @@ def find_pt_files(base_dir):
 embeddings = []
 embedding_ids = []
 
-base_dirs = "${embeddings_dirs}".split()
+base_dirs = [${embeddings_dirs.collect { "'${it}'" }.join(',')}]
 
 # Find all .pt files
 pt_files = []
