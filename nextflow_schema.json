@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com///nextflow_schema.json",
-  "title": " pipeline parameters",
+  "$id": "https://raw.githubusercontent.com/nf-core/veil/master/nextflow_schema.json",
+  "title": "pipeline parameters",
   "description": "",
   "type": "object",
   "$defs": {
-    "input_output_options": {
-      "title": "Input/output options",
+    "email_and_output_options": {
+      "title": "Email and output options",
       "type": "object",
       "fa_icon": "fas fa-terminal",
-      "description": "Define where the pipeline should find input data and save output data.",
+      "description": "Define where the pipeline should save output data.",
       "required": ["outdir"],
       "properties": {
         "outdir": {
@@ -24,6 +24,11 @@
           "fa_icon": "fas fa-envelope",
           "help_text": "Set this parameter to your e-mail address to get a summary e-mail with details of the run sent to you when the workflow exits. If set in your user config file (`~/.nextflow/config`) then you don't need to specify this on the command line for every run.",
           "pattern": "^([a-zA-Z0-9_\\-\\.]+)@([a-zA-Z0-9_\\-\\.]+)\\.([a-zA-Z]{2,5})$"
+        },
+        "multiqc_title": {
+          "type": "string",
+          "description": "MultiQC report title. Printed as page header, used for filename if not otherwise specified.",
+          "fa_icon": "fas fa-file-signature"
         }
       }
     },
@@ -176,159 +181,258 @@
           "description": "Display hidden parameters in the help message (only works when --help or --help_full are provided)."
         }
       }
+    },
+
+    "input_dataset_options": {
+      "title": "Input datasets",
+      "type": "object",
+      "fa_icon": "fas fa-database",
+      "description": "Sample/dataset paths and ORF coordinate parsing settings. These are normally edited directly in the pipeline's user-input config file rather than passed on the command line.",
+      "required": [
+        "datasets",
+        "orf_coord_fields"
+      ],
+      "properties": {
+        "datasets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Map of dataset name to input protein fasta/pep file path, e.g. { ENA: \"/path/to/file.pep\" }.",
+          "fa_icon": "fas fa-file-alt"
+        },
+        "orf_coord_fields": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Map of dataset name to the underscore-delimited field index (negative, from the end) holding the ORF start/stop position.",
+          "fa_icon": "fas fa-ruler-combined"
+        },
+        "exclude_datasets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dataset names to exclude from the final analysis.",
+          "fa_icon": "fas fa-ban"
+        }
+      }
+    },
+    "protein_annotation_options": {
+      "title": "Protein annotation options",
+      "type": "object",
+      "fa_icon": "fas fa-dna",
+      "description": "Reference databases, PFAM annotation, and PASV settings used to detect and annotate marker proteins.",
+      "properties": {
+        "phidra_dir": {
+          "type": "string",
+          "format": "directory-path",
+          "description": "Path to the Phidra tool/resources directory.",
+          "fa_icon": "fas fa-folder"
+        },
+        "pfamDB": {
+          "type": "string",
+          "format": "directory-path",
+          "description": "Path to the Pfam database used for domain annotation.",
+          "fa_icon": "fas fa-database"
+        },
+        "genofeature_metadata": {
+          "type": "string",
+          "format": "file-path",
+          "description": "Path to the protein/genofeature metadata file.",
+          "fa_icon": "fas fa-file-alt"
+        },
+        "proteins": {
+          "type": "array",
+          "description": "List of marker proteins to search for. Each entry defines the protein name, its PFAM domain hit table, subject database for search, and (optionally) a PASV alignment reference file.",
+          "fa_icon": "fas fa-list",
+          "items": {
+            "type": "object",
+            "properties": {
+              "protein": {
+                "type": "string"
+              },
+              "pfamDomain": {
+                "type": "string",
+                "format": "file-path"
+              },
+              "subjectDB": {
+                "type": "string",
+                "format": "file-path"
+              },
+              "pasv_align_refs": {
+                "type": "string",
+                "format": "file-path"
+              }
+            },
+            "required": [
+              "protein",
+              "pfamDomain",
+              "subjectDB"
+            ]
+          }
+        },
+        "pasv_proteins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "RNR",
+            "PolA"
+          ],
+          "description": "Proteins (from the `proteins` list) to run PASV on."
+        },
+        "tophit_proteins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "helicase"
+          ],
+          "description": "Proteins (from the `proteins` list) to annotate via top-hit."
+        },
+        "domain_proteins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "PolB"
+          ],
+          "description": "Proteins (from the `proteins` list) to annotate via domain match."
+        },
+        "pasv_threshold": {
+          "type": "number",
+          "default": 0.01,
+          "description": "PASV scoring threshold based on decimal values, signatures above the threshold are included if they are not expected signatures.",
+          "fa_icon": "fas fa-sliders-h"
+        },
+        "pasv_settings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          },
+          "description": "Per-protein PASV settings: mapped_name, region-of-interest start/end, catalytic sites, and expected signatures.",
+          "fa_icon": "fas fa-cogs",
+          "default": {
+            "PolA": {
+              "mapped_name": "PolA_putative",
+              "roi_start": 521,
+              "roi_end": 923,
+              "cat_sites": "668,705,758,762",
+              "expected_sigs": [
+                "RDKY",
+                "RDKF",
+                "RDKL"
+              ]
+            },
+            "RNR": {
+              "mapped_name": "RNR_putative",
+              "roi_start": 437,
+              "roi_end": 625,
+              "cat_sites": "437,439,441,462,438",
+              "expected_sigs": [
+                "NCECL",
+                "NCECV"
+              ]
+            }
+          }
+        },
+        "pfam_annotation_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Map of PFAM accession to annotation label.",
+          "fa_icon": "fas fa-tags",
+          "default": {
+            "PF00136": "rPolB",
+            "PF03175": "pPolB"
+          }
+        }
+      }
+    },
+    "clustering_options": {
+      "title": "Clustering & final analysis options",
+      "type": "object",
+      "fa_icon": "fas fa-project-diagram",
+      "description": "Parameters controlling clustering sweeps and the final-analysis run.",
+      "properties": {
+        "nn": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Nearest-neighbor values to perform parameter sweep over.",
+          "fa_icon": "fas fa-share-alt"
+        },
+        "md": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Minimum-distance values to perform parameter sweep over.",
+          "fa_icon": "fas fa-arrows-alt-h"
+        },
+        "mc": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Minimum cluster size values to sweep over.",
+          "fa_icon": "fas fa-object-group"
+        },
+        "excluded_genofeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Genofeatures to exclude from the final analysis.",
+          "fa_icon": "fas fa-ban"
+        },
+        "final_md": {
+          "type": "integer",
+          "description": "Minimum-distance value used for the final analysis run.",
+          "fa_icon": "fas fa-arrows-alt-h"
+        },
+        "final_nn": {
+          "type": "integer",
+          "description": "Nearest-neighbor value used for the final analysis run.",
+          "fa_icon": "fas fa-share-alt"
+        },
+        "final_analysis": {
+          "type": "boolean",
+          "description": "Set to run the final analysis stage instead of the parameter sweep.",
+          "fa_icon": "fas fa-flag-checkered"
+        }
+      }
     }
   },
   "allOf": [
     {
-      "$ref": "#/$defs/input_output_options"
+      "$ref": "#/$defs/email_and_output_options"
     },
     {
       "$ref": "#/$defs/institutional_config_options"
     },
     {
       "$ref": "#/$defs/generic_options"
+    },
+    {
+      "$ref": "#/$defs/input_dataset_options"
+    },
+    {
+      "$ref": "#/$defs/protein_annotation_options"
+    },
+    {
+      "$ref": "#/$defs/clustering_options"
     }
-  ],
-  
-  "properties": {
-    "datasets": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      }
-    },
-    "orf_coord_fields": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "integer"
-      }
-    },
-    "phidra_dir": {
-      "type": "string"
-    },
-    "pfamDB": {
-      "type": "string"
-    },
-    "pasv_proteins": {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": ["RNR", "PolA"]
-    },
-    "tophit_proteins": {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": ["helicase"]
-    },
-    "domain_proteins": {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": ["PolB"]
-    },
-    "pasv_threshold": {
-      "type": "number",
-      "default": 0.01
-    },
-    "pasv_settings": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "object"
-      },
-      "default": {
-        "PolA": {
-          "mapped_name": "PolA_putative",
-          "roi_start": 521,
-          "roi_end": 923,
-          "cat_sites": "668,705,758,762",
-          "expected_sigs": ["RDKY", "RDKF", "RDKL"]
-        },
-        "RNR": {
-          "mapped_name": "RNR_putative",
-          "roi_start": 437,
-          "roi_end": 625,
-          "cat_sites": "437,439,441,462,438",
-          "expected_sigs": ["NCECL", "NCECV"]
-        }
-      }
-    },
-    "pfam_annotation_map": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {
-        "PF00136": "rPolB",
-        "PF03175": "pPolB"
-      }
-    },
-    "genofeature_metadata": {
-      "type": "string"
-    },
-    "proteins": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "protein": { "type": "string" },
-          "pfamDomain": { "type": "string" },
-          "subjectDB": { "type": "string" },
-          "pasv_align_refs": { "type": "string" }
-        },
-        "required": ["protein", "pfamDomain", "subjectDB"]
-      },
-      "default": [
-        {
-          "protein": "helicase",
-          "pfamDomain": "/mnt/VEIL/tools/phidra_resources/ida_files/helicase_ida_file_09_30_25.tsv",
-          "subjectDB": "/mnt/VEIL/references/helicase/HeliBase_v3_github.fasta"
-        },
-        {
-          "protein": "PolB",
-          "pfamDomain": "/mnt/VEIL/tools/phidra_resources/ida_files/polb_PF08490_PR00136_PF03175_ida_file.tsv",
-          "subjectDB": "/mnt/VEIL/tools/phidra_resources/subject_db/polb_refs_pPolB_rPolB_piPolB.fasta"
-        },
-        {
-          "protein": "PolA",
-          "pfamDomain": "/mnt/VEIL/users/nolanv/pipeline_project/Pipeline_production_unused/pola_PF00476_ida_file.tsv",
-          "subjectDB": "/mnt/VEIL/references/polA/uniprotkb_DNA_polymerase_A_2023_10_13.fasta",
-          "pasv_align_refs": "/mnt/VEIL/references/pasv/pasv_profile/pola_16_k12_ref.fa"
-        }
-      ]
-    },
-    "nn": {
-      "type": "array",
-      "items": { "type": "integer", "minimum": 2 },
-      "default": [75, 100]
-    },
-    "md": {
-      "type": "array",
-      "items": { "type": "number", "minimum": 0, "maximum": 1 },
-      "default": [0.0, 0.3, 0.5, 0.7]
-    },
-    "mc": {
-      "type": "array",
-      "items": { "type": "integer", "minimum": 2 },
-      "default": [10, 30]
-    },
-    "excluded_genofeatures": {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": []
-    },
-    "exclude_datasets": {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": []
-    },
-    "final_md": {
-      "type": "number",
-      "default": 0.7
-    },
-    "final_nn": {
-      "type": "integer",
-      "default": 100
-    },
-    "final_analysis": {
-      "type": "boolean"
-    }
-  }
+  ]
 }
