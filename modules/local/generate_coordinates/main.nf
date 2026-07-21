@@ -1,7 +1,7 @@
 process GENERATE_COORDINATES {
     publishDir { "${params.outdir}/${publish_subdir}" },
         mode: 'copy'
-    label 'process_gpu'
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
     // container "containers/umap/umap.sif"
 
