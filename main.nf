@@ -1,33 +1,86 @@
-nextflow.enable.dsl=2
+#!/usr/bin/env nextflow
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    VEIL/veilpipeline
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Github : https://github.com/VEIL/veilpipeline
+----------------------------------------------------------------------------------------
+*/
 
-// SUBWORKFLOW: Three subworkflows consisting of local modules
-include { REP_MODULE_ANALYSIS } from './subworkflows/rep_module_analysis'
-include { ANNOTATE_PROTEINS } from './subworkflows/annotate_proteins'
-include { EMBEDDING_PARAMETER_DECISION } from './subworkflows/embedding_parameter_decision'
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    IMPORT FUNCTIONS / MODULES / SUBWORKFLOWS / WORKFLOWS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
+include { VEILPIPELINE  } from './workflows/veilpipeline'
+include { PIPELINE_INITIALISATION } from './subworkflows/local/utils_nfcore_veilpipeline_pipeline'
+include { PIPELINE_COMPLETION     } from './subworkflows/local/utils_nfcore_veilpipeline_pipeline'
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    NAMED WORKFLOWS FOR PIPELINE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
+//
+// WORKFLOW: Run main analysis pipeline depending on type of input
+//
+workflow VEIL_VEILPIPELINE {
+    main:
+
+    //
+    // WORKFLOW: Run pipeline
+    //
+    VEILPIPELINE (
+        params.multiqc_config,
+        params.multiqc_logo,
+        params.multiqc_methods_description
+    )
+    emit:
+    VEILPIPELINE.out.multiqc_report // channel: /path/to/multiqc_report.html
+}
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    RUN MAIN WORKFLOW
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
 
 workflow {
-  if (!params.final_analysis) {
-    Channel
-        .fromList(params.datasets.entrySet())
-        .map { entry ->
-            def meta = [ id: entry.key, path: entry.value ]
-            tuple(meta, meta.path)
-        }
-        .set { ch_datasets }
 
-    def combinedDatasetsExists = file("${params.outdir}/combined_datasets.tsv").exists()
-    println "combinedDatasetsExists = ${combinedDatasetsExists}"
-    if ( combinedDatasetsExists ) {
-        EMBEDDING_PARAMETER_DECISION(Channel.fromPath("${params.outdir}/combined_datasets.tsv"))
-    }
-    else {
-        // re-run FIRST_RUN for all datasets, then pass FIRST_RUN emitted channels to SECOND_RUN
-        def firstRes = ANNOTATE_PROTEINS(ch_datasets)
+    main:
+    //
+    // SUBWORKFLOW: Run initialisation tasks
+    //
+    PIPELINE_INITIALISATION (
+        params.version,
+        params.validate_params,
+        params.monochrome_logs,
+        args,
+        params.outdir,
+        params.help,
+        params.help_full,
+        params.show_hidden
+    )
 
-        EMBEDDING_PARAMETER_DECISION(firstRes.ch_combined_tsv)
-    }
-  }
-  if (params.final_analysis) {
-        REP_MODULE_ANALYSIS("${params.outdir}/combined_datasets.tsv")
-  }
+    //
+    // WORKFLOW: Run main workflow
+    //
+    VEIL_VEILPIPELINE ()
+    //
+    // SUBWORKFLOW: Run completion tasks
+    //
+    PIPELINE_COMPLETION (
+        params.email,
+        params.email_on_fail,
+        params.plaintext_email,
+        params.outdir,
+        params.monochrome_logs,
+        VEIL_VEILPIPELINE.out[0]
+    )
 }
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    THE END
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
