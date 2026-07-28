@@ -46,7 +46,17 @@ workflow VEILPIPELINE {
         def combinedDatasetsExists = file("${params.outdir}/combined_datasets.tsv").exists()
         println "combinedDatasetsExists = ${combinedDatasetsExists}"
         if ( combinedDatasetsExists ) {
-            def embedRes = EMBEDDING_PARAMETER_DECISION(channel.fromPath("${params.outdir}/combined_datasets.tsv"))
+            // build cleaned-fasta channel from published outputs
+            def ch_cleaned_fasta_lookup = channel.fromPath("${params.outdir}/00_cleaned_fasta/*_cleaned.fasta")
+                .map { fasta ->
+                    def dataset_id = fasta.baseName.replaceAll(/_cleaned$/, '')
+                    tuple(dataset_id, fasta)
+                }
+
+            def embedRes = EMBEDDING_PARAMETER_DECISION(
+                channel.fromPath("${params.outdir}/combined_datasets.tsv"),
+                ch_cleaned_fasta_lookup 
+            )
             ch_versions = ch_versions.mix(embedRes.ch_versions)
             ch_multiqc_files_sweep = ch_multiqc_files_sweep.mix(embedRes.ch_multiqc_files)
             
@@ -61,7 +71,10 @@ workflow VEILPIPELINE {
             ch_versions = ch_versions.mix(annotationRes.ch_versions)
             ch_multiqc_files_sweep = ch_multiqc_files_sweep.mix(annotationRes.ch_multiqc_files)
 
-            def embedRes = EMBEDDING_PARAMETER_DECISION(annotationRes.ch_combined_tsv)
+            def embedRes = EMBEDDING_PARAMETER_DECISION(
+                annotationRes.ch_combined_tsv,
+                annotationRes.ch_cleaned_fasta   
+            )
             ch_versions = ch_versions.mix(embedRes.ch_versions)
             ch_multiqc_files_sweep = ch_multiqc_files_sweep.mix(embedRes.ch_multiqc_files)
         }

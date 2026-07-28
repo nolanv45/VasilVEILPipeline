@@ -6,6 +6,7 @@ process CLEAN_FASTA_HEADERS {
         'oras://community.wave.seqera.io/library/python_gawk:e804f331fd0c91ef' :
         'community.wave.seqera.io/library/python_gawk:cafc043e2983edac' }"
 
+    publishDir "${params.outdir}/00_cleaned_fasta", mode: 'copy'
     input:
         tuple val(meta), path(fasta)
 

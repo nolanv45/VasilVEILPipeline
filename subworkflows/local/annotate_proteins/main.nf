@@ -215,7 +215,5 @@ workflow ANNOTATE_PROTEINS {
         ch_combined_tsv = COMBINE_DATASETS.out.results
         ch_multiqc_files = ch_annotation_plots
         ch_versions = ch_versions
+        ch_cleaned_fasta = CLEAN_FASTA_HEADERS.out.fasta
 }
-
-
-

@@ -1,6 +1,10 @@
 process HDBSCAN_VISUALS {
     label "process_single"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas_numpy_matplotlib:49fe58d99685085a' :
+        'community.wave.seqera.io/library/python_pandas_numpy_matplotlib:81ea56d306702341' }"
+
     publishDir "${params.outdir}/05_final_analysis/hdbscan/visuals",
         mode: 'copy'
 

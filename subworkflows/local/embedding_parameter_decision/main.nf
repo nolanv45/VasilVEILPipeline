@@ -7,12 +7,16 @@ include { HDBSCAN } from '../../../modules/local/hdbscan'
 workflow EMBEDDING_PARAMETER_DECISION {
     take:
         ch_combined_tsv
+        ch_cleaned_fasta
         
     main:
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = channel.fromPath(params.genofeature_metadata)
 
-    EMBEDDING_PLAN(ch_combined_tsv)
+    EMBEDDING_PLAN(
+        ch_combined_tsv,
+        ch_cleaned_fasta.map { meta, fasta -> fasta }.collect()
+    )
 
     ch_embeddings = EMBEDDINGS(
         EMBEDDING_PLAN.out.planned_fastas.flatten().map { fasta ->
