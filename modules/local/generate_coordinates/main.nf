@@ -1,5 +1,5 @@
 process GENERATE_COORDINATES {
-    publishDir { "${params.outdir}/${publish_subdir}" },
+    publishDir "${params.outdir}",
         mode: 'copy'
     label 'process_medium'
     conda "${moduleDir}/environment.yml"

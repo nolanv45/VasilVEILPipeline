@@ -213,8 +213,8 @@ workflow ANNOTATE_PROTEINS {
 
     emit:
         ch_combined_tsv = COMBINE_DATASETS.out.results
-        multiqc_files = ch_annotation_plots
-        versions = ch_versions
+        ch_multiqc_files = ch_annotation_plots
+        ch_versions = ch_versions
 }
 
 

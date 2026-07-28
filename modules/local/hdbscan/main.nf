@@ -10,7 +10,7 @@ process HDBSCAN {
     conda "${moduleDir}/environment.yml"
     
     input:
-        path embeddings_dirs
+        val embeddings_dirs
         val coordinates_dir  // Space-separated list of coordinate directories
         path filtered_tsv    // TSV file with metadata
         path metadata_file   // Metadata file with colors/markers
@@ -79,7 +79,7 @@ def normalize_input_dirs(raw_value):
 def load_raw_embeddings(embeddings_dirs_str):
     embeddings = []
     embedding_ids = []
-    base_dirs = embeddings_dirs_str.split() if isinstance(embeddings_dirs_str, str) else embeddings_dirs_str
+    base_dirs = normalize_input_dirs(embeddings_dirs_str) if isinstance(embeddings_dirs_str, str) else embeddings_dirs_str
     pt_files = []
     for base_dir in base_dirs:
         pt_files.extend(find_pt_files(base_dir))

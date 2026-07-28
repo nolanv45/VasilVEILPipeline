@@ -25,7 +25,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
     )
 
     ch_existing_embedding_dirs = channel
-        .fromPath("${params.outdir}/embeddings/*", type: 'dir')
+        .fromPath("${params.outdir}/embeddings/*/*/*", type: 'dir')
 
     ch_embedding_dirs = ch_existing_embedding_dirs
         .mix(ch_embeddings.embeddings_dirs)
@@ -98,6 +98,6 @@ workflow EMBEDDING_PARAMETER_DECISION {
 
     emit:
         ch_combined_tsv = ch_combined_tsv
-        versions = ch_versions
-        multiqc_files = ch_multiqc_files
+        ch_versions = ch_versions
+        ch_multiqc_files = ch_multiqc_files
 }

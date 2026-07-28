@@ -2,7 +2,10 @@ process ANALYZE_AND_PLOT {
     tag "${meta.id}:${meta.protein}"
     label "process_single"
     conda "${moduleDir}/environment.yml"
-
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas_matplotlib_seaborn_biopython:bb6c83cdca261fd3' :
+        'community.wave.seqera.io/library/python_pandas_matplotlib_seaborn_biopython:5da4df83f651f2be' }"
+        
     publishDir "${params.outdir}/03_annotation_analysis", 
         mode: 'copy',
         saveAs: { filename ->
