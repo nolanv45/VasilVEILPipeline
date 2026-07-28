@@ -1,6 +1,10 @@
 process GENOFEATURE_CENTRIC {
     label "process_medium"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas_numpy_matplotlib_pillow:3f1442a23078f4ef' :
+        'community.wave.seqera.io/library/python_pandas_numpy_matplotlib_pillow:e3f9f64a94d792de' }"
+
     publishDir "${params.outdir}/05_final_analysis/umap",
         mode: 'copy'
     

@@ -1,4 +1,10 @@
 process HDBSCAN {
+    label "process_medium"
+    conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:81ab5dec161369ec' :
+        'community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:6c2364c205cfbeb9' }"
+    
     publishDir "${params.outdir}/04_parameter_selection/hdbscan",
         mode: 'copy',
         saveAs: { filename ->
@@ -6,9 +12,6 @@ process HDBSCAN {
             else if (filename.startsWith("clusters_csv/")) filename
             else null
         }
-    label "process_medium"
-    conda "${moduleDir}/environment.yml"
-    
     input:
         val embeddings_dirs
         val coordinates_dir  // Space-separated list of coordinate directories

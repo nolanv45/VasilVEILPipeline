@@ -208,14 +208,6 @@
           },
           "description": "Map of dataset name to the underscore-delimited field index (negative, from the end) holding the ORF start/stop position.",
           "fa_icon": "fas fa-ruler-combined"
-        },
-        "exclude_datasets": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Dataset names to exclude from the final analysis.",
-          "fa_icon": "fas fa-ban"
         }
       }
     },
@@ -395,6 +387,14 @@
           },
           "default": [],
           "description": "Genofeatures to exclude from the final analysis.",
+          "fa_icon": "fas fa-ban"
+        },
+        "exclude_datasets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dataset names to exclude from the final analysis.",
           "fa_icon": "fas fa-ban"
         },
         "final_md": {

@@ -2,6 +2,10 @@ process PHIDRA {
     tag "${meta.id}:${meta.protein}"
     label "process_medium"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_mmseqs2_hmmer_tqdm_biopython:135a607ca5c91283' :
+        'community.wave.seqera.io/library/python_mmseqs2_hmmer_tqdm_biopython:20e6ea9ab94efc3f' }"
+
     publishDir "${params.outdir}/01_phidra",
         mode: 'copy',
         saveAs: { filename -> "${meta.id}/${filename}" }

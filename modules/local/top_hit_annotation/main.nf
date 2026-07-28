@@ -2,6 +2,9 @@ process TOP_HIT_ANNOTATION {
     tag "${meta.id}:${meta.protein}"
     label "process_single"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas:2a5ca2e7dd4ced9c' :
+        'community.wave.seqera.io/library/python_pandas:eb68d9296e3f036a' }"
 
     input:
     tuple val(meta), 
