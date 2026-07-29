@@ -14,12 +14,6 @@ The VEIL/veilpipeline documentation is split into the following pages:
 
 
 
-# VEIL Environmental Metagenomic Phage Replication Module Pipeline
-A Nextflow pipeline for identifying and analyzing phage replication proteins and replication modules in environmental viral metagenomes.
-
-The Viral Ecology and Informatics Lab (VEIL) at the University of Delaware investigates viral communities by identifying viral populations through the replication proteins encoded in their genomes. These replication proteins are critical to the biology of phages (viruses that infect microbes), influencing phenotypic characteristics of infection, such as replication speed, burst size, and infection strategy (virulent vs. temperate), which ultimately impact microbial host communities and nutrient cycling. 
-
-This repository hosts an automated pipeline built with Nextflow which identifies and characterizes viral replication proteins and modules, specifically targeting DNA Polymerase A (PolA), DNA Polymerase B (PolB), Ribonucleotide Reductase (RNR), and helicases using user-established reference resources. The pipeline provides annotated outputs and visualizations.
 
 ## Features
 

@@ -188,6 +188,7 @@
       "type": "object",
       "fa_icon": "fas fa-database",
       "description": "Sample/dataset paths and ORF coordinate parsing settings. These are normally edited directly in the pipeline's user-input config file rather than passed on the command line.",
+      "help_text": "This section defines which datasets are fed into the pipeline and how ORF (open reading frame) start/stop coordinates are parsed out of each dataset's sequence headers. Both `datasets` and `orf_coord_fields` are edited directly in the `conf/inputs.config` file rather than passed as command-line flags, and can include as many datasets as needed - the naming convention (the keys) is entirely up to the user, but must stay consistent between `datasets` and `orf_coord_fields`.",
       "required": [
         "datasets",
         "orf_coord_fields"
@@ -199,14 +200,17 @@
             "type": "string"
           },
           "description": "Map of dataset name to input protein fasta/pep file path, e.g. { ENA: \"/path/to/file.pep\" }.",
-          "fa_icon": "fas fa-file-alt"
+          "fa_icon": "fas fa-file-alt",
+          "help_text": "Each key is a user-chosen dataset name and each value is the absolute path to that dataset's protein fasta/pep file, for example:\n\n```groovy\ndatasets = [\n  Dataset1: \"/absolute/path/to/Dataset1\",\n  Dataset2: \"/absolute/path/to/Dataset2\"\n]\n```\n\nYou can add as many dataset entries as needed. Dataset names chosen here are reused later on in `exclude_datasets` and are the keys expected in `orf_coord_fields`."
         },
+        
         "orf_coord_fields": {
           "type": "object",
           "additionalProperties": {
             "type": "integer"
           },
           "description": "Map of dataset name to the underscore-delimited field index (negative, from the end) holding the ORF start/stop position.",
+          "help_text": "Sequence headers are underscore-delimited, and this parameter tells the pipeline which field (counting from the end) contains the ORF start position for each dataset. Use a negative index: -1 is the last field, -2 is the second-to-last field, and so on. For example:\n\n```groovy\norf_coord_fields = [BATS: -2, GOV: -3]\n```\n\nEach key must match a dataset name defined in `datasets`.",
           "fa_icon": "fas fa-ruler-combined"
         }
       }
@@ -216,17 +220,20 @@
       "type": "object",
       "fa_icon": "fas fa-dna",
       "description": "Reference databases, PFAM annotation, and PASV settings used to detect and annotate marker proteins.",
+      "help_text": "PHIDRA conducts homology search and Pfam domain-based validation to identify proteins of interest. Every configured protein passes through PHIDRA validation, and is then assigned a 'genofeature' (the level of genomic information relevant to enzyme biochemistry/phenotype prediction) via one of three methods:\n\n- **PASV proteins** (`pasv_proteins`) are assigned genofeatures based on active site signatures, tuned via `pasv_settings` and `pasv_threshold`.\n- **Tophit proteins** (`tophit_proteins`) are assigned genofeatures based on top BLAST hits.\n- **Domain proteins** (`domain_proteins`) are assigned genofeatures based on Pfam domain matches, using `pfam_annotation_map`.\n\nAdditional proteins can be added to any of these lists, but naming must stay consistent with the corresponding entry in `proteins`.",
       "properties": {
         "phidra_dir": {
           "type": "string",
           "format": "directory-path",
           "description": "Path to the Phidra tool/resources directory.",
+          "help_text": "Path to the PHIDRA directory, which by default is included inside the pipeline directory. This variable name must remain `phidra_dir` as it is referenced directly in the pipeline code.",
           "fa_icon": "fas fa-folder"
         },
         "pfamDB": {
           "type": "string",
           "format": "directory-path",
           "description": "Path to the Pfam database used for domain annotation.",
+          "help_text": "Path to the Pfam database, found inside the PHIDRA directory by default. This variable name must remain `pfamDB` as it is referenced directly in the pipeline code.",
           "fa_icon": "fas fa-database"
         },
         "genofeature_metadata": {
@@ -238,6 +245,7 @@
         "proteins": {
           "type": "array",
           "description": "List of marker proteins to search for. Each entry defines the protein name, its PFAM domain hit table, subject database for search, and (optionally) a PASV alignment reference file.",
+          "help_text": "Each protein block controls PHIDRA and PASV behaviour for one marker protein. Enter each protein as a separate object in this array.\n\nRequired for every protein:\n- `protein`: the protein name (must match the corresponding entry in `pasv_proteins`/`tophit_proteins`/`domain_proteins`; case sensitive).\n- `pfamDomain`: path to a TSV file of InterPro Domain Architectures, used by PHIDRA.\n- `subjectDB`: path to a FASTA file of known proteins used for the PHIDRA homology search.\n\nAdditionally required for PASV proteins only:\n- `pasv_align_refs`: path to a FASTA file of reference sequences for PASV alignment and active site analysis. VEIL only uses this for RNR and PolA.\n\nExample:\n```groovy\nproteins = [\n  [\n    protein: \"RNR\",\n    pfamDomain: \"/path/to/pfamDomain.tsv\",\n    subjectDB: \"/path/to/subjectDB.fa\",\n    pasv_align_refs: \"/path/to/pasv_refs.fa\"\n  ],\n  [\n    protein: \"PolB\",\n    pfamDomain: \"/path/to/pfamDomain.tsv\",\n    subjectDB: \"/path/to/subjectDB.fa\"\n  ]\n]\n```",
           "fa_icon": "fas fa-list",
           "items": {
             "type": "object",
@@ -274,7 +282,8 @@
             "RNR",
             "PolA"
           ],
-          "description": "Proteins (from the `proteins` list) to run PASV on."
+          "description": "Proteins (from the `proteins` list) to run PASV on.",
+          "help_text": "Proteins assigned genofeatures via PASV active-site signature analysis. Each entry must also appear in `proteins`, and must have a `pasv_align_refs` file and a corresponding entry in `pasv_settings`."
         },
         "tophit_proteins": {
           "type": "array",
@@ -284,7 +293,8 @@
           "default": [
             "helicase"
           ],
-          "description": "Proteins (from the `proteins` list) to annotate via top-hit."
+          "description": "Proteins (from the `proteins` list) to annotate via top-hit.",
+          "help_text": "Proteins assigned genofeatures via top-hit annotation. Each entry must also appear in `proteins`."
         },
         "domain_proteins": {
           "type": "array",
@@ -294,12 +304,14 @@
           "default": [
             "PolB"
           ],
-          "description": "Proteins (from the `proteins` list) to annotate via domain match."
+          "description": "Proteins (from the `proteins` list) to annotate via domain match.",
+          "help_text": "Proteins assigned genofeatures based on Pfam domain match. Each entry must also appear in `proteins`, and must be represented in `pfam_annotation_map`."
         },
         "pasv_threshold": {
           "type": "number",
           "default": 0.01,
           "description": "PASV scoring threshold based on decimal values, signatures above the threshold are included if they are not expected signatures.",
+          "help_text": "Expected signatures (`expected_sigs` in `pasv_settings`) are always included in the output when found. Any other signature is also included if it makes up more than this fraction of the total protein data. Given as a decimal (default `0.01` = 1%).",
           "fa_icon": "fas fa-sliders-h"
         },
         "pasv_settings": {
@@ -308,6 +320,7 @@
             "type": "object"
           },
           "description": "Per-protein PASV settings: mapped_name, region-of-interest start/end, catalytic sites, and expected signatures.",
+          "help_text": "Defines the VEIL standard PASV settings for each PASV protein (currently PolA and RNR), and can be adjusted if needed. For each protein:\n- `mapped_name`: display name used for the genofeature.\n- `roi_start` / `roi_end`: region-of-interest bounds for the alignment.\n- `cat_sites`: comma-separated catalytic site positions.\n- `expected_sigs`: list of expected active-site signatures; see `pasv_threshold` for how unexpected signatures are handled.",
           "fa_icon": "fas fa-cogs",
           "default": {
             "PolA": {
@@ -339,6 +352,7 @@
             "type": "string"
           },
           "description": "Map of PFAM accession to annotation label.",
+          "help_text": "Maps each Pfam domain ID to the genofeature name assigned to `domain_proteins` when that domain is matched. Format is genofeature name -> Pfam domain ID, e.g.:\n\n```groovy\npfam_annotation_map = [\n  \"rPolB\" : \"PF00136\",\n  \"pPolB\" : \"PF03175\"\n]\n```",
           "fa_icon": "fas fa-tags",
           "default": {
             "PF00136": "rPolB",
@@ -352,32 +366,36 @@
       "type": "object",
       "fa_icon": "fas fa-project-diagram",
       "description": "Parameters controlling clustering sweeps and the final-analysis run.",
+      "help_text": "Controls the UMAP/HDBSCAN parameter sweep (first/subsequent pipeline runs) and the genofeature-centric final analysis run (`--final_analysis`).\n\nOn a clean output directory, the pipeline runs through embedding generation and stops after producing UMAP/HDBSCAN plots across the `nn`/`md`/`mc` sweep. Re-running with existing embeddings in the output directory skips the (resource-intensive) embedding step and regenerates plots directly - useful when adding more `nn`/`md` values. The tiled sweep output can help you pick the `final_nn`/`final_md` values to use for the final analysis.\n\n`final_analysis` should be left `false` in the config; the final analysis run is instead triggered via the `--final_analysis` command-line flag, which regenerates coordinates as needed and produces genofeature-centric plots, applying any `exclude_datasets`/`excluded_genofeatures` filters.",
       "properties": {
         "nn": {
           "type": "array",
           "items": {
-            "type": "integer",
+            "type": "number",
             "minimum": 1
           },
           "description": "Nearest-neighbor values to perform parameter sweep over.",
+          "help_text": "UMAP nearest-neighbor (`n_neighbors`) values to sweep over, e.g. `nn = [75, 100]`.", 
           "fa_icon": "fas fa-share-alt"
         },
         "md": {
           "type": "array",
           "items": {
-            "type": "integer",
+            "type": "number",
             "minimum": 1
           },
           "description": "Minimum-distance values to perform parameter sweep over.",
+          "help_text": "UMAP minimum-distance values to sweep over, e.g. `md = [0.3, 0.5, 0.7]`.",
           "fa_icon": "fas fa-arrows-alt-h"
         },
         "mc": {
           "type": "array",
           "items": {
-            "type": "integer",
+            "type": "number",
             "minimum": 1
           },
           "description": "Minimum cluster size values to sweep over.",
+          "help_text": "HDBSCAN minimum-cluster size values to sweep over, e.g. `mc = [10, 30]`.",
           "fa_icon": "fas fa-object-group"
         },
         "excluded_genofeatures": {
@@ -387,6 +405,7 @@
           },
           "default": [],
           "description": "Genofeatures to exclude from the final analysis.",
+          "help_text": "Genofeatures to remove from the final analysis and plotting (regenerates UMAP coordinates), e.g. `excluded_genofeatures = ['pPolB', 'PolA']`. Only applies when running with `--final_analysis`.",
           "fa_icon": "fas fa-ban"
         },
         "exclude_datasets": {
@@ -395,21 +414,25 @@
             "type": "string"
           },
           "description": "Dataset names to exclude from the final analysis.",
+          "help_text": "Dataset names (from `datasets`) to remove from the final analysis and plotting, e.g. `exclude_datasets = ['ENA', 'BATS']`. Only applies when running with `--final_analysis`.",
           "fa_icon": "fas fa-ban"
         },
         "final_md": {
           "type": "integer",
           "description": "Minimum-distance value used for the final analysis run.",
+          "help_text": "The single minimum-distance value used for the genofeature-centric UMAP plot in the final analysis. Chosen based on the results of the `md`/`nn` parameter sweep.",
           "fa_icon": "fas fa-arrows-alt-h"
         },
         "final_nn": {
           "type": "integer",
           "description": "Nearest-neighbor value used for the final analysis run.",
+          "help_text": "The single nearest-neighbor value used for the genofeature-centric UMAP plot in the final analysis. Chosen based on the results of the `md`/`nn` parameter sweep.",
           "fa_icon": "fas fa-share-alt"
         },
         "final_analysis": {
           "type": "boolean",
           "description": "Set to run the final analysis stage instead of the parameter sweep.",
+          "help_text": "Should be left `false` in the config file. Trigger the final analysis run via the `--final_analysis` command-line flag instead of editing this value directly.",
           "fa_icon": "fas fa-flag-checkered"
         }
       }
