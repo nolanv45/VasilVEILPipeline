@@ -2,6 +2,10 @@ process PASV_POST {
     tag "${meta.id}:${meta.protein}"
     label "process_single"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas_matplotlib_seaborn_biopython:b753642f0324f753' :
+        'community.wave.seqera.io/library/python_pandas_matplotlib_seaborn_biopython:c712f18b7e36712f' }"
+
     publishDir "${params.outdir}/03_annotation_analysis",
         mode: 'copy',
         pattern: "*.{tsv,png}",

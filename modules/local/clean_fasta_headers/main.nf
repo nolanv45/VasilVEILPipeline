@@ -2,7 +2,11 @@ process CLEAN_FASTA_HEADERS {
     tag "${meta.id}"
     label "process_single"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_gawk:e804f331fd0c91ef' :
+        'community.wave.seqera.io/library/python_gawk:cafc043e2983edac' }"
 
+    publishDir "${params.outdir}/00_cleaned_fasta", mode: 'copy'
     input:
         tuple val(meta), path(fasta)
 

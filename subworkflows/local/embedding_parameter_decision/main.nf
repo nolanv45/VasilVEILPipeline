@@ -7,12 +7,16 @@ include { HDBSCAN } from '../../../modules/local/hdbscan'
 workflow EMBEDDING_PARAMETER_DECISION {
     take:
         ch_combined_tsv
+        ch_cleaned_fasta
         
     main:
     ch_filtered_tsv = ch_combined_tsv
     ch_metadata = channel.fromPath(params.genofeature_metadata)
 
-    EMBEDDING_PLAN(ch_combined_tsv)
+    EMBEDDING_PLAN(
+        ch_combined_tsv,
+        ch_cleaned_fasta.map { meta, fasta -> fasta }.collect()
+    )
 
     ch_embeddings = EMBEDDINGS(
         EMBEDDING_PLAN.out.planned_fastas.flatten().map { fasta ->
@@ -25,7 +29,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
     )
 
     ch_existing_embedding_dirs = channel
-        .fromPath("${params.outdir}/embeddings/*", type: 'dir')
+        .fromPath("${params.outdir}/embeddings/*/*/*", type: 'dir')
 
     ch_embedding_dirs = ch_existing_embedding_dirs
         .mix(ch_embeddings.embeddings_dirs)
@@ -98,6 +102,6 @@ workflow EMBEDDING_PARAMETER_DECISION {
 
     emit:
         ch_combined_tsv = ch_combined_tsv
-        versions = ch_versions
-        multiqc_files = ch_multiqc_files
+        ch_versions = ch_versions
+        ch_multiqc_files = ch_multiqc_files
 }

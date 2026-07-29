@@ -3,30 +3,45 @@ nextflow_pipeline {
     name "Test pipeline"
     script "../main.nf"
     tag "pipeline"
+    profile "test"
 
     test("-profile test") {
 
         when {
             params {
                 outdir = "$outputDir"
+                // final_analysis defaults to false in the `test` profile below,
+                // so this run exercises the ANNOTATE_PROTEINS + EMBEDDING_PARAMETER_DECISION branch.
+                // Override here only if you need something different from conf/test.config, e.g.:
+                // final_analysis = false
             }
         }
 
         then {
-            // stable_path: All files + folders in ${params.outdir}/ with a stable path (including file name)
-            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*.{html,json,txt}'])
-            // stable_content: All files in ${params.outdir}/ with stable content
-            def stable_content = getAllFilesFromDir(params.outdir, ignoreFile: 'tests/.nftignore')
-            assert workflow.success
+            // stable_name: All files + folders in ${params.outdir}/ with a stable name
+            def stable_name = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*.{html,json,txt}', 'multiqc/multiqc_plots', 'multiqc/multiqc_plots/**' ])
+            // stable_path: All files in ${params.outdir}/ with stable content
+            def stable_path = getAllFilesFromDir(params.outdir, ignoreFile: 'tests/.nftignore')
             assertAll(
+                { assert workflow.success },
                 { assert snapshot(
+                    // Number of successful tasks
+                    workflow.trace.succeeded().size(),
                     // pipeline versions.yml file for multiqc from which Nextflow version is removed because we test pipelines on multiple Nextflow versions
                     removeNextflowVersion("$outputDir/pipeline_info/veilpipeline_software_mqc_versions.yml"),
                     // All stable path name, with a relative path
-                    stable_path,
+                    stable_name,
                     // All files with stable contents
-                    stable_content
-                ).match() }
+                    stable_path,
+                    // Import files with unstable content
+                ).match() },
+
+                // Spot-check a few key outputs directly rather than only via snapshot,
+                // so failures are easy to interpret without opening the .snap diff
+                { assert path("${params.outdir}/combined_datasets.tsv").exists() },
+                { assert path("${params.outdir}/00_cleaned_fasta").exists() },
+                { assert path("${params.outdir}/pipeline_info/veilpipeline_software_mqc_versions.yml").exists() },
+                { assert path("${params.outdir}/04_parameter_selection/multiqc").exists() }
             )
         }
     }

@@ -9,6 +9,9 @@ process UMAP_PROJECTION {
         }
     label "process_medium"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_numpy_pandas_matplotlib_pillow:bc19f6df598f92e8' :
+        'community.wave.seqera.io/library/python_numpy_pandas_matplotlib_pillow:352bfae9d89bced3' }"
     
     input:
         val coordinates_dir  // Space-separated list of coordinate directories

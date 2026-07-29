@@ -1,9 +1,11 @@
 process GENERATE_COORDINATES {
-    publishDir { "${params.outdir}/${publish_subdir}" },
+    publishDir "${params.outdir}",
         mode: 'copy'
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    // container "containers/umap/umap.sif"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:02ddcbc0a6f7a925' :
+        'community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:80951f99909b8c30' }"
 
     input:
         tuple val(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
@@ -16,6 +18,9 @@ process GENERATE_COORDINATES {
     """
 #!/usr/bin/env python3
 import os
+os.environ['NUMBA_CACHE_DIR'] = os.path.join(os.getcwd(), '.numba_cache')
+os.makedirs(os.environ['NUMBA_CACHE_DIR'], exist_ok=True)
+
 import torch
 import numpy as np
 import umap

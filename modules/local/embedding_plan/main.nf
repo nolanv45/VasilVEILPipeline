@@ -1,8 +1,13 @@
 process EMBEDDING_PLAN {
     label "process_single"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/python_pandas:2a5ca2e7dd4ced9c' :
+        'community.wave.seqera.io/library/python_pandas:eb68d9296e3f036a' }"
+
     input:
     path(combined_tsv)
+    path(cleaned_fastas)
 
     output:
     path("**/*.fasta"), emit: planned_fastas, optional: true
@@ -18,11 +23,17 @@ process EMBEDDING_PLAN {
 import csv
 import json
 import re
+import glob
 from collections import defaultdict
 from pathlib import Path
 
 combined_tsv = "${combined_tsv}"
-datasets = json.loads('''${datasetsJson}''')
+
+# Build dataset -> fasta path map from staged cleaned fastas (named {dataset_id}_cleaned.fasta)
+datasets = {}
+for fasta_path in glob.glob("*_cleaned.fasta"):
+    dataset_id = re.sub(r'_cleaned\\.fasta\$', '', fasta_path)
+    datasets[dataset_id] = fasta_path
 
 groups = defaultdict(set)
 

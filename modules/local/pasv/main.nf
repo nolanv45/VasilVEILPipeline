@@ -2,6 +2,10 @@ process PASV {
     tag "${meta.id}:${meta.protein}"
     label "process_medium"
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'oras://community.wave.seqera.io/library/mafft_wget_unzip:02d31255d322ff51' :
+        'community.wave.seqera.io/library/mafft_wget_unzip:cbc53f36b859dff0' }"
+
     publishDir "${params.outdir}/02_pasv",
         mode: 'copy',
         pattern: "pasv/output/*_putative.pasv_signatures.tsv",

@@ -36,8 +36,12 @@ workflow VEIL_VEILPIPELINE {
         params.multiqc_logo,
         params.multiqc_methods_description
     )
+
+    ch_multiqc_report = VEILPIPELINE.out.multiqc_report_sweep
+        .mix(VEILPIPELINE.out.multiqc_report_final)
+
     emit:
-    VEILPIPELINE.out.multiqc_report // channel: /path/to/multiqc_report.html
+    ch_multiqc_report // channel: /path/to/multiqc_report.html
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
