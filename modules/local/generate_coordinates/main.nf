@@ -8,7 +8,7 @@ process GENERATE_COORDINATES {
         'community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:80951f99909b8c30' }"
 
     input:
-        tuple val(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
+        tuple path(embeddings_dirs), val(excluded_genofeatures), val(nn), val(md), val(publish_subdir)
         
     output:
         path "${publish_subdir}", emit: coordinates_files

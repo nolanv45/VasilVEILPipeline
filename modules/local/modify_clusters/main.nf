@@ -24,9 +24,10 @@ import pandas as pd
 #nn 100 and clusters 30 and 10
 print()
 
+final_md = ${params.final_md}*10
 # Hardcoded paths and parameters
-file1 = os.path.join("${cluster_csv_dir}", "hdbscan_nn100_md7_minclust30_clusters.csv")
-file2 = os.path.join("${cluster_csv_dir}", "hdbscan_nn100_md7_minclust10_clusters.csv")
+file1 = os.path.join("${cluster_csv_dir}", f"hdbscan_nn${params.final_nn}_md{final_md}_minclust30_clusters.csv")
+file2 = os.path.join("${cluster_csv_dir}", f"hdbscan_nn${params.final_nn}_md{final_md}_minclust10_clusters.csv")
 
 # Create a dataframe from each file
 df1 = pd.read_csv(file1, sep=",", header=0)

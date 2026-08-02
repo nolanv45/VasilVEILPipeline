@@ -11,6 +11,7 @@ process EMBEDDING_PLAN {
 
     output:
     path("**/*.fasta"), emit: planned_fastas, optional: true
+    path("expected_dirs.txt"), emit: expected_dirs
     path("versions.yml"), emit: versions
 
     script:
@@ -59,7 +60,11 @@ with open(combined_tsv, 'r', encoding='utf-8', newline='') as combined_handle:
         if dataset and protein and genofeature and orf_id:
             groups[(dataset, protein, genofeature)].add(orf_id)
 
+expected_dirs = []
+
 for (dataset, protein, genofeature), expected_ids in groups.items():
+
+    expected_dirs.append(f"{dataset}/{protein}/{genofeature}")
 
     fasta_path = Path(datasets.get(dataset, ''))
     if not str(fasta_path):
@@ -74,8 +79,11 @@ for (dataset, protein, genofeature), expected_ids in groups.items():
         for pt in output_root.rglob('*.pt')
     } if output_root.exists() else set()
 
-    # Fallback guard for slight naming differences between TSV IDs and pt stems.
-    if len(existing_ids) >= len(expected_ids):
+    # Set-based completeness check. A count comparison here would silently
+    # accept a directory whose IDs don't actually match expected_ids
+    # (e.g. leftover/orphaned .pt files from a differently-configured run),
+    # skipping genuinely missing sequences without any error.
+    if expected_ids.issubset(existing_ids):
         continue
 
     missing_ids = sorted(expected_ids.difference(existing_ids))
@@ -117,6 +125,10 @@ for (dataset, protein, genofeature), expected_ids in groups.items():
     # Do not emit empty FASTA files; that would trigger unnecessary EMBEDDINGS tasks.
     if out_fasta.stat().st_size == 0 or written['count'] == 0:
         out_fasta.unlink(missing_ok=True)
+
+with open("expected_dirs.txt", "w", encoding="utf-8") as handle:
+    for key in expected_dirs:
+        handle.write(key + "\\n")
 PY
 
     python3 - <<'PY'
