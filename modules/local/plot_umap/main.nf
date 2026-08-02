@@ -55,8 +55,8 @@ try:
         colors.append(color)
         markers.append(marker if pd.notna(marker) else ".")
 
-    if os.path.exists(conns_file) and os.path.basename(conns_file) != "NO_FILE":
-        connections_df = pd.read_csv(conns_file, sep='\\t')
+    connections_df = pd.read_csv(conns_file, sep='\\t')
+    if not connections_df.empty:
         print(f"Loaded {len(connections_df)} connections")
         id_to_idx = {eid: idx for idx, eid in enumerate(embedding_ids)}
         connections = []
@@ -66,7 +66,7 @@ try:
         connections = np.array(connections)
     else:
         connections = []
-        print("No connections file found")
+        print("connections.tsv present but empty")
 
     fig, ax = plt.subplots(figsize=(10, 10))
 

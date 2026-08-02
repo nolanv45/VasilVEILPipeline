@@ -165,7 +165,7 @@ for feature in visible_features_list:
     datasets_for_feature = sorted({embedding_to_dataset[eid] for eid in all_eids if eid in embedding_to_dataset})
 
     for dataset in datasets_for_feature:
-        fig, ax = plt.subplots(figsize=(10, 7))
+        fig, ax = plt.subplots(figsize=(10, 10))
 
         # Plot connections (same as above)
         for id1, id2 in connections:

@@ -3,7 +3,8 @@ include { EMBEDDINGS } from '../../../modules/local/embeddings'
 include { GENERATE_COORDINATES } from '../../../modules/local/generate_coordinates'
 include { PLOT_UMAP } from '../../../modules/local/plot_umap'
 include { TILE_UMAPS } from '../../../modules/local/tile_umaps'
-include { HDBSCAN } from '../../../modules/local/hdbscan'
+include { CLUSTER_HDBSCAN } from '../../../modules/local/cluster_hdbscan'
+include { TILE_HDBSCAN }    from '../../../modules/local/tile_hdbscan'
 
 workflow EMBEDDING_PARAMETER_DECISION {
     take:
@@ -64,7 +65,7 @@ workflow EMBEDDING_PARAMETER_DECISION {
             parameter_combinations.collect { combo ->
                 def nn = combo[0]
                 def md = combo[1]
-                def md_tag = (md * 10).intValue()
+                def md_tag = String.format('%.1f', md).replace('.', 'p')
                 tuple(
                     dirs,
                     excluded_genofeatures,
@@ -80,14 +81,14 @@ workflow EMBEDDING_PARAMETER_DECISION {
 
     ch_coord_files = GENERATE_COORDINATES.out.coordinates_files
         .map { dir ->
-            def m = (dir.name =~ /nn(\d+)_md(\d+)/)
+            def m = (dir.name =~ /nn(\d+)_md(\d+p?\d*)/)
             if (!m) {
                 error "Could not parse nn/md from coordinates dir name: ${dir.name}"
             }
             def nn = m[0][1] as Integer
             def md_tag = m[0][2]
 
-            def coordFile = dir.listFiles().find { it.name ==~ /coordinates_nn\d+_md\d+\.tsv/ }
+            def coordFile = dir.listFiles().find { it.name ==~ /coordinates_nn\d+_md\d+p?\d*\.tsv/ }
             if (!coordFile) {
                 error "No coordinates_nn*_md*.tsv file found in ${dir}"
             }
@@ -111,23 +112,32 @@ workflow EMBEDDING_PARAMETER_DECISION {
         ch_metadata
     )
 
-    ch_hbd = HDBSCAN(
+
+    ch_cluster_hdbscan_inputs = ch_coord_files
+        .flatMap { nn, md_tag, coordFile, connsFile ->
+            params.mc.collect { mc -> tuple(nn, md_tag, coordFile, mc) }
+        }
+
+    ch_cluster_hdbscan = CLUSTER_HDBSCAN(
+        ch_cluster_hdbscan_inputs,
         ch_embedding_dirs.collect(),
-        ch_coordinate_dirs,
-        ch_filtered_tsv,
-        ch_metadata,
-        ch_plot_umap.plot.collect()
+        ch_filtered_tsv.first(),
+        ch_metadata.first()
+    )
+
+    ch_hbd = TILE_HDBSCAN(
+        ch_cluster_hdbscan.plot.mix(ch_plot_umap.plot).collect()
     )
 
     ch_multiqc_files = channel.empty()
     ch_multiqc_files = ch_multiqc_files.mix(ch_umap.tiled_image)
     ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.tiled_image)
-    ch_multiqc_files = ch_multiqc_files.mix(ch_hbd.plots)
+    ch_multiqc_files = ch_multiqc_files.mix(ch_cluster_hdbscan.plot.collect())
 
     ch_versions = channel.empty()
     ch_versions = ch_versions.mix(EMBEDDING_PLAN.out.versions)
     ch_versions = ch_versions.mix(EMBEDDINGS.out.versions)
-    ch_versions = ch_versions.mix(HDBSCAN.out.versions)
+    ch_versions = ch_versions.mix(TILE_HDBSCAN.out.versions)
     ch_versions = ch_versions.mix(TILE_UMAPS.out.versions)
     ch_versions = ch_versions.mix(GENERATE_COORDINATES.out.versions)
 

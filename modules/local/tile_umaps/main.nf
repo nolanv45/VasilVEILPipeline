@@ -47,17 +47,14 @@ FONT_SIZE = 120
 LEGEND_FIGSIZE = (16, 36)
 LEGEND_WIDTH_FRACTION = 0.25   # legend width as a fraction of grid height
 
-FILENAME_RE = re.compile(r"umap_nn(\\d+)_md(\\d+)\\.png\$")
-
+FILENAME_RE = re.compile(r"umap_nn(\\d+)_md(\\d+p?\\d*)\\.png\$")
 
 def parse_params(filename):
-    \"\"\"Single source of truth for extracting (nn, md) from a plot filename.
-    Returns None if the filename doesn't match the expected pattern.\"\"\"
     match = FILENAME_RE.search(os.path.basename(filename))
     if not match:
         return None
     nn = int(match.group(1))
-    md = float(match.group(2)) / 10
+    md = float(match.group(2).replace('p', '.'))
     return nn, md
 
 

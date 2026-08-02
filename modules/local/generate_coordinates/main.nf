@@ -120,8 +120,8 @@ if len(embeddings) > 0:
     coordinates = reducer.fit_transform(embeddings)
     
     # Save outputs with parameter-specific names
-    md_int = int(md * 10)
-    coord_file = f"${publish_subdir}/coordinates_nn{nn}_md{md_int}.tsv"
+    dirname = os.path.basename("${publish_subdir}")  # e.g. "nn5_md0p5"
+    coord_file = f"${publish_subdir}/coordinates_{dirname}.tsv"
 
     coord_df = pd.DataFrame({
         'embedding_id': embedding_ids,
