@@ -5,6 +5,11 @@ process CLUSTER_HDBSCAN {
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'oras://community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:81ab5dec161369ec' :
         'community.wave.seqera.io/library/python_pytorch_numpy_pandas_pruned:6c2364c205cfbeb9' }"
+  
+    publishDir "${params.outdir}/04_parameter_selection/hdbscan/clusters_csv",
+        mode: 'copy',
+        pattern: "*.csv"
+        
     input:
         tuple val(nn), val(md_tag), path(coord_file), val(mc)
         val embeddings_dirs
